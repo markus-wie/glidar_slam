@@ -28,12 +28,18 @@ glidar_slam:
     # Timing diagnostics for the SLAM pipeline and loop-closure worker.
     debug_timings: true
 
+    # Whether the lidar scan is voxelized before use.
+    # Avoids overweighting dense points that are in close proximity to the sensor, and reduces the number of points used in scan matching.
+    lidar_voxelization_enable: false
+    # The size of the voxelization grid used to downsample the lidar scan
+    lidar_voxelization_size: 0.05
+
     # Occupancy Grid Parameters
     occ_map_resolution: 0.05
     occ_map_padding: 2
 
     # Submap Parameters
-    submap_window_size: 20
+    submap_window_size: 5
 
     # Ground Observation Parameters
     ground_debug_enable: false
@@ -95,10 +101,8 @@ glidar_slam:
     # the relative pose between the query and candidate keyframes 
     # and the expected relative pose.
     loop_mahalanobis_threshold: 2.0
-    # noise floor for loop closure proposals to guarantee invertible matrices 
-    loop_minimum_xy_variance: 0.01
     # minimum score for a loop closure proposal to be considered valid
-    loop_minimum_score: 0.5
+    loop_minimum_score: 0.8
     # maximum consistency 
     loop_maximum_consistency_error: 0.5
     
@@ -108,29 +112,21 @@ glidar_slam:
     # Uses exp(-distance / csm_smear_deviation) instead of a Gaussian kernel.
     csm_use_laplace_kernel: true
     # Uses a linear-time Euclidean distance transform instead of point-wise Gaussian splatting.
-    csm_use_distance_transform: false
+    csm_use_distance_transform: true
     # Uses TBB for parallel candidate evaluation when TBB is available at build time.
     csm_use_tbb: true
-    # Additional penalties that are being applied to the CSM score by the current deviation from the initial guess
-    # This is a strategy to solve the long corridor problem by trusting the odometry induced guess more than the matcher
-    # They represent the standard deviation of a Gaussian that is applied to the CSM score based on the distance and angle from the initial guess.
-    # The actual penalty is computed as 1 - 0.2 * (delta^2 / std_dev^2), which acts as a flattened first order approximation of a Gaussian kernel
-    # One must consider that this artifically inflates the covariance of the CSM result, so it should be used with care.
-    csm_use_penalty: false
-    csm_distance_penalty_std_dev: 0.5
-    csm_angle_penalty_std_dev: 0.5
 
     #### Cascading CSM stages. Windows denote the width of the area around the previous stage result
+    ## Very high resolutions in junction with high csm_smear_deviation, the creation of the likelihood field can be very slow.
     # Search resolutions [m] for each stage
-    csm_stage_resolutions: [0.05, 0.02, 0.01]
-
+    csm_stage_resolutions: [0.05, 0.02, 0.02]
     # Search window widths [m] for each stage
     csm_stage_translation_steps: [0.1, 0.01, 0.001]
-    csm_stage_window_x: [1.0, 0.06, 0.006]
-    csm_stage_window_y: [1.0, 0.06, 0.006]
+    csm_stage_window_x: [1.0, 0.15, 0.015]
+    csm_stage_window_y: [1.0, 0.15, 0.015]
     # Search window widths [rad] for each stage
     csm_stage_angular_steps: [0.1, 0.01, 0.001]
-    csm_stage_window_yaw: [1.0, 0.06, 0.006]
+    csm_stage_window_yaw: [1.0, 0.15, 0.015]
 
     # iSAM 2 Parameters
     isam_relinearizeThreshold: 0.1

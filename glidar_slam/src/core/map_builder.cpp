@@ -52,68 +52,6 @@ void raytraceLine(int x0, int y0, int x1, int y1, const Visitor & visitor)
 
 }  // namespace
 
-LocalMapData buildLocalOccupancy(const PointCloudXYZ & scan, double resolution)
-{
-  LocalMapData result;
-  result.resolution = resolution;
-  if (resolution <= 0.0) {
-    return result;
-  }
-
-  std::unordered_map<std::int64_t, int> evidence;
-  for (const auto & point : scan.points) {
-    if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
-      continue;
-    }
-    const int target_x = cellCoordinate(point.x, resolution);
-    const int target_y = cellCoordinate(point.y, resolution);
-    const int origin_x = 0;
-    const int origin_y = 0;
-    raytraceLine(origin_x, origin_y, target_x, target_y, [&](int x, int y) {
-      if (x == target_x && y == target_y) {
-        return false;
-      }
-      --evidence[cellKey(x, y)];
-      return true;
-    });
-    ++evidence[cellKey(target_x, target_y)];
-  }
-
-  result.cells.reserve(evidence.size());
-  for (const auto & [key, value] : evidence) {
-    if (value == 0) {
-      continue;
-    }
-    result.cells.push_back(
-      {static_cast<int>(key >> 32), static_cast<int>(static_cast<std::int32_t>(key & 0xffffffff)),
-       value});
-  }
-  return result;
-}
-
-void addLocalGroundMap(
-  LocalMapData & data, const PointCloudXYZRGBA & cloud, const Parameters & parameters)
-{
-  data.ground_resolution = parameters.ground_map_resolution;
-  if (data.ground_resolution <= 0.0) {
-    return;
-  }
-  const float hit = static_cast<float>(std::log(
-    parameters.ground_marking_log_odds_hit / (1.0 - parameters.ground_marking_log_odds_hit)));
-  const float miss = static_cast<float>(std::log(
-    parameters.ground_marking_log_odds_miss / (1.0 - parameters.ground_marking_log_odds_miss)));
-  for (const auto & point : cloud.points) {
-    if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
-      continue;
-    }
-    data.ground_cells.push_back(
-      {static_cast<int>(std::floor(point.x / data.ground_resolution)),
-       static_cast<int>(std::floor(point.y / data.ground_resolution)),
-       point.a >= parameters.ground_marking_white_threshold ? hit : miss, point.r, point.g,
-       point.b});
-  }
-}
-
 MapBuilder::MapBuilder(const std::shared_ptr<Parameters> & parameters) : parameters_(parameters)
 {
 }
@@ -303,7 +241,7 @@ void MapBuilder::apply(const KeyFrame & keyframe)
     applied.ground_cells.push_back(
       {world_x, world_y, local_cell.log_odds, local_cell.r, local_cell.g, local_cell.b});
   }
-  
+
   applied_[keyframe.key] = std::move(applied);
 }
 
@@ -414,6 +352,68 @@ void MapBuilder::publish()
   snapshot->generation = generation_;
   std::lock_guard<std::mutex> lock(mutex_);
   latest_ = std::move(snapshot);
+}
+
+LocalMapData MapBuilder::buildLocalOccupancy(const PointCloudXYZ & scan, double resolution)
+{
+  LocalMapData result;
+  result.resolution = resolution;
+  if (resolution <= 0.0) {
+    return result;
+  }
+
+  std::unordered_map<std::int64_t, int> evidence;
+  for (const auto & point : scan.points) {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+      continue;
+    }
+    const int target_x = cellCoordinate(point.x, resolution);
+    const int target_y = cellCoordinate(point.y, resolution);
+    const int origin_x = 0;
+    const int origin_y = 0;
+    raytraceLine(origin_x, origin_y, target_x, target_y, [&](int x, int y) {
+      if (x == target_x && y == target_y) {
+        return false;
+      }
+      --evidence[cellKey(x, y)];
+      return true;
+    });
+    ++evidence[cellKey(target_x, target_y)];
+  }
+
+  result.cells.reserve(evidence.size());
+  for (const auto & [key, value] : evidence) {
+    if (value == 0) {
+      continue;
+    }
+    result.cells.push_back(
+      {static_cast<int>(key >> 32), static_cast<int>(static_cast<std::int32_t>(key & 0xffffffff)),
+       value});
+  }
+  return result;
+}
+
+void MapBuilder::addLocalGroundMap(
+  LocalMapData & data, const PointCloudXYZRGBA & cloud, const Parameters & parameters)
+{
+  data.ground_resolution = parameters.ground_map_resolution;
+  if (data.ground_resolution <= 0.0) {
+    return;
+  }
+  const float hit = static_cast<float>(std::log(
+    parameters.ground_marking_log_odds_hit / (1.0 - parameters.ground_marking_log_odds_hit)));
+  const float miss = static_cast<float>(std::log(
+    parameters.ground_marking_log_odds_miss / (1.0 - parameters.ground_marking_log_odds_miss)));
+  for (const auto & point : cloud.points) {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+      continue;
+    }
+    data.ground_cells.push_back(
+      {static_cast<int>(std::floor(point.x / data.ground_resolution)),
+       static_cast<int>(std::floor(point.y / data.ground_resolution)),
+       point.a >= parameters.ground_marking_white_threshold ? hit : miss, point.r, point.g,
+       point.b});
+  }
 }
 
 }  // namespace glidar_slam::core

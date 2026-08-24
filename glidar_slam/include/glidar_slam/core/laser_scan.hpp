@@ -13,8 +13,8 @@ class LaserScan
 public:
   LaserScan() = default;
 
-  explicit LaserScan(PointCloudXYZ points);
-  explicit LaserScan(std::vector<Point2D> points);
+  explicit LaserScan(PointCloudXYZ && points);
+  explicit LaserScan(std::vector<Point2D> && points);
 
   bool empty() const;
   const PointCloudXYZ & points() const;

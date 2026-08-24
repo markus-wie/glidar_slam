@@ -11,6 +11,7 @@
 #include "glidar_slam/core/utils.hpp"
 #include "glidar_slam/logger/logger.hpp"
 #include "pcl/common/transforms.h"
+#include "pcl/filters/voxel_grid.h"
 
 namespace glidar_slam::core {
 
@@ -89,60 +90,64 @@ double computeYawDistance(const gtsam::Pose3 & lhs, const gtsam::Pose3 & rhs)
   return std::abs(Utils::normalizeAngle(lhs_yaw - rhs_yaw));
 }
 
-void collectVisiblePoints(
-  const PointCloudXYZ & scan, const gtsam::Pose3 & pose, const Point2D & viewpoint,
-  std::vector<Point2D> & output)
+std::vector<Point2D> transformScanPoints(const PointCloudXYZ & scan, const gtsam::Pose3 & pose)
 {
-  const size_t world_points_start = output.size();
-  output.reserve(output.size() + 2 * scan.size());
+  std::vector<Point2D> points;
+  points.reserve(scan.size());
   for (const auto & point : scan) {
     const gtsam::Point3 world_point = pose.transformFrom(gtsam::Point3(point.x, point.y, point.z));
     if (std::isfinite(world_point.x()) && std::isfinite(world_point.y())) {
-      output.push_back({world_point.x(), world_point.y()});
+      points.push_back({world_point.x(), world_point.y()});
     }
   }
+  return points;
+}
 
-  const size_t world_points_end = output.size();
-  if (world_points_start == world_points_end) {
-    return;
-  }
+pcl::PointCloud<pcl::PointXYZ>::Ptr voxelizeLidarScan(const LaserScan & scan, double voxel_size)
+{
+  pcl::PointCloud<pcl::PointXYZ>::Ptr voxelized_cloud =
+    std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+  pcl::VoxelGrid<pcl::PointXYZ> voxel_filter;
+  voxel_filter.setInputCloud(scan.points().makeShared());
+  voxel_filter.setLeafSize(
+    static_cast<float>(voxel_size), static_cast<float>(voxel_size), static_cast<float>(voxel_size));
+  voxel_filter.filter(*voxelized_cloud);
 
-  // TODO: check what it does exactly. basically voxilization and a trick to filter "ghost" points
-  constexpr double min_square_distance = 0.1 * 0.1;
-  size_t trailing_point = world_points_start;
-  Point2D first_point{};
-  bool first_time = true;
+  return voxelized_cloud;
+}
 
-  for (size_t point = world_points_start; point < world_points_end; ++point) {
-    const Point2D current_point = output[point];
-    if (first_time) {
-      first_point = current_point;
-      first_time = false;
-    }
+std::vector<Point2D> linearInterpolateScan(const LaserScan & scan, double target_spacing = 0.05)
+{
+  std::vector<Point2D> continuous_points;
 
-    const double delta_x = first_point.x - current_point.x;
-    const double delta_y = first_point.y - current_point.y;
-    if (delta_x * delta_x + delta_y * delta_y <= min_square_distance) {
+  const std::vector<Point2D> & scan_points = scan.points2D();
+
+  for (size_t i = 0; i < scan_points.size() - 1; ++i) {
+    const Point2D & p1 = scan_points[i];
+    const Point2D & p2 = scan_points[i + 1];
+
+    if (!std::isfinite(p1.x) || !std::isfinite(p2.x)) {
       continue;
     }
 
-    // Keep only the contiguous side of the scan that faces the matcher viewpoint.
-    const double a = viewpoint.y - first_point.y;
-    const double b = first_point.x - viewpoint.x;
-    const double c = first_point.y * viewpoint.x - first_point.x * viewpoint.y;
-    const double side = current_point.x * a + current_point.y * b + c;
-    first_point = current_point;
+    double dx = p2.x - p1.x;
+    double dy = p2.y - p1.y;
+    double segment_len = std::hypot(dx, dy);
 
-    if (side < 0.0) {
-      trailing_point = point;
+    // If the gap is huge (e.g., transitioning from a wall to empty space), don't interpolate
+    if (segment_len > 1.0) {
+      continuous_points.push_back({p1.x, p1.y});
       continue;
     }
 
-    for (size_t segment_point = trailing_point; segment_point < point; ++segment_point) {
-      output.push_back(output[segment_point]);
+    // Step along the continuous line at exactly target_spacing intervals
+    int num_steps = std::max(1, static_cast<int>(segment_len / target_spacing));
+    for (int step = 0; step < num_steps; ++step) {
+      double t = static_cast<double>(step) / num_steps;
+      continuous_points.push_back({p1.x + t * dx, p1.y + t * dy});
     }
-    trailing_point = point;
   }
+  return continuous_points;
 }
 
 }  // namespace
@@ -153,6 +158,14 @@ SlamSystem::SlamSystem(const std::shared_ptr<Parameters> & parameters) : paramet
   graph_optimizer_ = std::make_unique<GraphOptimizer>(parameters_);
   scan_matcher_ = std::make_unique<CorrelativeScanMatcher>(parameters_);
   ground_marking_matcher_ = std::make_unique<GroundMarkingMatcher>(parameters_);
+
+  std::vector<double> resolutions;
+  resolutions.reserve(parameters_->csm_search_stages.size());
+  for (const auto & stage : parameters_->csm_search_stages) {
+    resolutions.push_back(stage.field_resolution);
+  }
+
+  submap_grid_ = std::make_unique<SubmapGrid>(resolutions);
   loop_closure_detector_ = std::make_unique<LoopClosureDetector>(parameters_, map_database_);
   loop_closure_detector_->start();
   map_builder_ = std::make_unique<MapBuilder>(parameters_);
@@ -170,17 +183,117 @@ bool SlamSystem::process(
   const gtsam::Matrix66 & odom_covariance)
 {
   const auto process_start = std::chrono::steady_clock::now();
-  double ground_extraction_ms = 0;
+  double lidar_voxelization_ms = 0;
   double loop_proposals_ms = 0;
-  double submap_ms = 0;
+  double initialization_ms = 0;
+  double ground_extraction_ms = 0;
   double csm_ms = 0;
+  double factor_preparation_ms = 0;
   double optimization_ms = 0;
+  double keyframe_ms = 0;
+  double map_ms = 0;
+  double submap_ms = 0;
+  double update_covariance_ms = 0;
   double loop_dispatch_ms = 0;
 
-  const std::shared_ptr<const LaserScan> & laser_scan = sensor_data.laserScan();
-  if (laser_scan->empty()) {
+  // const std::shared_ptr<const LaserScan> & laser_scan = sensor_data.laserScan();
+  if (sensor_data.laserScan()->empty()) {
     SAM_WARN("Empty laser scan received. Did not run the system!");
     return false;
+  }
+
+  const auto voxelization_start = std::chrono::steady_clock::now();
+
+  std::shared_ptr<const LaserScan> laser_scan;
+  if (parameters_->lidar_voxelization_enable) {
+    const auto scan =
+      voxelizeLidarScan(*sensor_data.laserScan(), parameters_->lidar_voxelization_size);
+    laser_scan = std::make_shared<LaserScan>(std::move(*scan));
+  } else {
+    laser_scan = sensor_data.laserScan();
+  }
+
+  std::vector<Point2D> interpolated_points =
+    linearInterpolateScan(*sensor_data.laserScan(), parameters_->lidar_voxelization_size);
+  laser_scan = std::make_shared<LaserScan>(std::move(interpolated_points));
+
+  if (parameters_->debug_timings) {
+    lidar_voxelization_ms = elapsedMilliseconds(voxelization_start);
+  }
+
+  const auto loop_proposals_start = std::chrono::steady_clock::now();
+  processLoopClosureProposals();
+
+  if (parameters_->debug_timings) {
+    loop_proposals_ms = elapsedMilliseconds(loop_proposals_start);
+  }
+
+  const auto initialization_start = std::chrono::steady_clock::now();
+
+  const gtsam::Pose3 latest_odom_pose = makePlanarPose(odom_pose);
+
+  if (map_database_->size() == 0) {
+    std::optional<GroundPlaneObservation> ground_observation;
+    if (sensor_data.hasVisualData()) {
+      ground_observation = GroundPlaneExtractor::extract(
+        sensor_data.image(), sensor_data.depth(), sensor_data.cameraModel().intrinsics(),
+        sensor_data.cameraModel().baseFromCamera(), *parameters_);
+    }
+
+    const gtsam::Pose3 initial_pose = initialPoseFromGroundObservation(ground_observation);
+
+    graph_optimizer_->initialize(initial_pose, static_cast<uint64_t>(timestamp * 1e6));
+
+    auto new_keyframe = std::make_shared<KeyFrame>(
+      map_database_->incrementNextKey(), timestamp, initial_pose, latest_odom_pose, laser_scan,
+      std::nullopt, ground_observation);
+
+    auto local_map =
+      MapBuilder::buildLocalOccupancy(laser_scan->points(), parameters_->occ_map_resolution);
+
+    std::vector<Point2D> initial_points = transformScanPoints(laser_scan->points(), initial_pose);
+    submap_grid_->add(initial_points, new_keyframe->key);
+
+    if (ground_observation) {
+      MapBuilder::addLocalGroundMap(local_map, ground_observation->ground_cloud, *parameters_);
+    }
+
+    new_keyframe->local_map =
+      std::make_shared<const global_map::LocalMapData>(std::move(local_map));
+    map_database_->addKeyFrame(new_keyframe);
+    map_builder_->submit(map_database_->getSnapshot(new_keyframe->key));
+
+    SAM_INFO("System initialized with first keyframe at timestamp: {}", timestamp);
+
+    {
+      std::lock_guard<std::mutex> lock(latest_output_mutex_);
+      latest_pose_ = initial_pose;
+    }
+    return true;
+  }
+
+  std::shared_ptr<const KeyFrame> reference_keyframe = map_database_->getLatestKeyFrame();
+
+  // Get relative odometry delta and apply to the reference keyframes world pose
+  const gtsam::Pose3 raw_odom_delta =
+    reference_keyframe->odom_pose.inverse().compose(latest_odom_pose);
+  const gtsam::Pose3 current_guess = reference_keyframe->pose.compose(raw_odom_delta);
+
+  // Check if we should spawn a new keyframe based on motion thresholds
+  if (!shouldCreateKeyFrame(latest_odom_pose)) {
+    {
+      std::lock_guard<std::mutex> lock(latest_output_mutex_);
+      latest_pose_ = current_guess;
+    }
+    {
+      std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
+      latest_map_to_odom_ = current_guess.compose(latest_odom_pose.inverse());
+    }
+    return false;
+  }
+
+  if (parameters_->debug_timings) {
+    initialization_ms = elapsedMilliseconds(initialization_start);
   }
 
   std::optional<GroundPlaneObservation> ground_observation;
@@ -194,79 +307,20 @@ bool SlamSystem::process(
     }
   }
 
-  const auto loop_proposals_start = std::chrono::steady_clock::now();
-  processLoopClosureProposals();
-
-  if (parameters_->debug_timings) {
-    loop_proposals_ms = elapsedMilliseconds(loop_proposals_start);
-  }
-
-  const gtsam::Pose3 latest_odom_pose = makePlanarPose(odom_pose);
-
-  if (map_database_->size() == 0) {
-    const gtsam::Pose3 initial_pose = initialPoseFromGroundObservation(ground_observation);
-    graph_optimizer_->initialize(initial_pose, static_cast<uint64_t>(timestamp * 1e6));
-    auto new_keyframe = std::make_shared<KeyFrame>(
-      map_database_->incrementNextKey(), timestamp, initial_pose, latest_odom_pose, laser_scan,
-      std::nullopt, ground_observation);
-    auto local_map = buildLocalOccupancy(laser_scan->points(), parameters_->occ_map_resolution);
-    if (ground_observation) {
-      addLocalGroundMap(local_map, ground_observation->ground_cloud, *parameters_);
-    }
-    new_keyframe->local_map =
-      std::make_shared<const global_map::LocalMapData>(std::move(local_map));
-    const uint64_t initial_key = new_keyframe->key;
-    map_database_->addKeyFrame(new_keyframe);
-    map_builder_->submit(map_database_->getSnapshot(initial_key));
-
-    SAM_INFO("System initialized with first keyframe at timestamp: {}", timestamp);
-  }
-
-  std::shared_ptr<const KeyFrame> reference_keyframe = map_database_->getLatestKeyFrame();
-
-  // Get relative odometry delta and apply to the reference keyframes world pose
-  const gtsam::Pose3 raw_odom_delta =
-    reference_keyframe->odom_pose.inverse().compose(latest_odom_pose);
-  const gtsam::Pose3 current_guess = reference_keyframe->pose.compose(raw_odom_delta);
-
-  // Check if we should spawn a new keyframe based on motion thresholds
-  if (!shouldCreateKeyFrame(latest_odom_pose)) {
-    std::lock_guard<std::mutex> lock(latest_output_mutex_);
-    latest_pose_ = current_guess;
-    return false;
-  }
+  const auto csm_start = std::chrono::steady_clock::now();
 
   uint64_t next_keyframe_key = map_database_->incrementNextKey();
 
-  // Construct the Submap Reference Scan
-  // Aggregate the points of the last N keyframes transformed into the world frame
-  const auto submap_start = std::chrono::steady_clock::now();
-  std::vector<Point2D> reference_points;
-
-  std::vector<std::shared_ptr<const KeyFrame>> keyframes = map_database_->getAllKeyFrames();
-
-  size_t start_idx = static_cast<int>(keyframes.size()) > parameters_->submap_window_size
-                       ? static_cast<int>(keyframes.size()) - parameters_->submap_window_size
-                       : 0;
-
-  const Point2D viewpoint{current_guess.x(), current_guess.y()};
-
-  for (size_t i = start_idx; i < keyframes.size(); ++i) {
-    const KeyFrame & kf = *keyframes.at(i);
-    collectVisiblePoints(kf.scan->points(), kf.pose, viewpoint, reference_points);
-  }
-  if (parameters_->debug_timings) {
-    submap_ms = elapsedMilliseconds(submap_start);
-  }
-
   // Execute the Correlative Scan Matcher
-  // This yields an optimized world pose and a 3x3 covariance matrix
-  const auto csm_start = std::chrono::steady_clock::now();
+  // This yields an optimized pose and a 3x3 covariance matrix
   const CsmResult csm_result =
-    scan_matcher_->match(reference_points, laser_scan->points2D(), Utils::toPose2D(current_guess));
+    scan_matcher_->match(*submap_grid_, laser_scan->points2D(), Utils::toPose2D(current_guess));
+
   if (parameters_->debug_timings) {
     csm_ms = elapsedMilliseconds(csm_start);
   }
+
+  const auto factor_preperation_start = std::chrono::steady_clock::now();
 
   {
     std::lock_guard<std::mutex> lock(latest_output_mutex_);
@@ -412,11 +466,19 @@ bool SlamSystem::process(
     }
   }
 
+  if (parameters_->debug_timings) {
+    factor_preparation_ms = elapsedMilliseconds(factor_preperation_start);
+  }
+
   const auto optimization_start = std::chrono::steady_clock::now();
+
   gtsam::Values updated_states = graph_optimizer_->optimize();
+
   if (parameters_->debug_timings) {
     optimization_ms = elapsedMilliseconds(optimization_start);
   }
+
+  const auto keyframe_start = std::chrono::steady_clock::now();
 
   gtsam::Pose3 optimized_pose = graph_optimizer_->getLatestPose();
 
@@ -433,14 +495,39 @@ bool SlamSystem::process(
     next_keyframe_key, timestamp, optimized_pose, latest_odom_pose, laser_scan,
     optimized_covariance, ground_observation);
 
-  auto local_map = buildLocalOccupancy(laser_scan->points(), parameters_->occ_map_resolution);
+  if (parameters_->debug_timings) {
+    keyframe_ms = elapsedMilliseconds(keyframe_start);
+  }
+
+  const auto map_start = std::chrono::steady_clock::now();
+
+  auto local_map =
+    MapBuilder::buildLocalOccupancy(laser_scan->points(), parameters_->occ_map_resolution);
   if (ground_observation) {
-    addLocalGroundMap(local_map, ground_observation->ground_cloud, *parameters_);
+    MapBuilder::addLocalGroundMap(local_map, ground_observation->ground_cloud, *parameters_);
   }
   new_keyframe->local_map = std::make_shared<const global_map::LocalMapData>(std::move(local_map));
 
   map_database_->addKeyFrame(new_keyframe);
   map_builder_->submit(map_database_->getSnapshot(next_keyframe_key));
+
+  if (parameters_->debug_timings) {
+    map_ms = elapsedMilliseconds(map_start);
+  }
+
+  const auto submap_start = std::chrono::steady_clock::now();
+
+  std::vector<Point2D> newest_points = transformScanPoints(laser_scan->points(), optimized_pose);
+  submap_grid_->add(newest_points, next_keyframe_key);
+  while (submap_grid_->size() > static_cast<std::size_t>(parameters_->submap_window_size)) {
+    submap_grid_->removeOldestKeyframe();
+  }
+
+  if (parameters_->debug_timings) {
+    submap_ms = elapsedMilliseconds(submap_start);
+  }
+
+  const auto update_covariance_start = std::chrono::steady_clock::now();
 
   std::unordered_map<uint64_t, gtsam::Matrix66> optimized_covariances;
   if (loop_closure_optimization_pending_) {
@@ -455,6 +542,7 @@ bool SlamSystem::process(
   }
   if (loop_closure_optimization_pending_) {
     map_builder_->rebuild(map_database_->getSnapshots());
+    rebuildSubmap();
   }
   loop_closure_optimization_pending_ = false;
 
@@ -464,8 +552,14 @@ bool SlamSystem::process(
     latest_map_to_odom_ = optimized_pose.compose(odom_to_base);
   }
 
+  if (parameters_->debug_timings) {
+    update_covariance_ms = elapsedMilliseconds(update_covariance_start);
+  }
+
   const auto loop_dispatch_start = std::chrono::steady_clock::now();
+
   dispatchFindLoopClosure(*new_keyframe);
+
   if (parameters_->debug_timings) {
     loop_dispatch_ms = elapsedMilliseconds(loop_dispatch_start);
   }
@@ -477,11 +571,16 @@ bool SlamSystem::process(
 
   if (parameters_->debug_timings) {
     SAM_INFO(
-      "SLAM timing [ms]: ground_extraction={}, loop_proposals={}, submap={}, "
-      "csm={}, optimization={}, loop_dispatch={}, total={}",
-      ground_extraction_ms, loop_proposals_ms, submap_ms, csm_ms, optimization_ms, loop_dispatch_ms,
-      elapsedMilliseconds(process_start));
+      "SLAM SYSTEM timings [ms]: lidar_voxelization={}, loop_proposals={}, initialization={}, "
+      "ground_extraction={}, "
+      "csm={}, factor_preparation={}, "
+      "optimization={}, keyframe={}, map={}, submap={}, update_covariance={}, loop_dispatch={}, "
+      "total={}",
+      lidar_voxelization_ms, loop_proposals_ms, initialization_ms, ground_extraction_ms, csm_ms,
+      factor_preparation_ms, optimization_ms, keyframe_ms, map_ms, submap_ms, update_covariance_ms,
+      loop_dispatch_ms, elapsedMilliseconds(process_start));
   }
+
   return true;
 }
 
@@ -548,6 +647,31 @@ bool SlamSystem::processLoopClosureProposals()
   loop_closure_optimization_pending_ = loop_closure_optimization_pending_ || !proposals.empty();
 
   return !proposals.empty();
+}
+
+void SlamSystem::rebuildSubmap()
+{
+  std::vector<double> resolutions;
+  resolutions.reserve(parameters_->csm_search_stages.size());
+  for (const auto & stage : parameters_->csm_search_stages) {
+    resolutions.push_back(stage.field_resolution);
+  }
+
+  auto rebuilt_submap = std::make_unique<SubmapGrid>(resolutions);
+  const auto keyframes = map_database_->getAllKeyFrames();
+  const std::size_t window_size =
+    static_cast<std::size_t>(std::max(parameters_->submap_window_size, 0));
+  const std::size_t first_keyframe =
+    keyframes.size() > window_size ? keyframes.size() - window_size : 0;
+
+  for (std::size_t index = first_keyframe; index < keyframes.size(); ++index) {
+    const auto & keyframe = keyframes[index];
+    const std::vector<Point2D> points =
+      transformScanPoints(keyframe->scan->points(), keyframe->pose);
+    rebuilt_submap->add(points, keyframe->key);
+  }
+
+  submap_grid_ = std::move(rebuilt_submap);
 }
 
 void SlamSystem::dispatchFindLoopClosure(const KeyFrame & latest_keyframe)

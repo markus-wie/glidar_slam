@@ -38,7 +38,6 @@ using glidar_slam::core::SlamSystem;
 Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("glidar_slam", options)
 {
   parameters_ = std::make_shared<Parameters>();
-  slam_system_ = std::make_unique<SlamSystem>(parameters_);
   latest_odom_covariance_.setIdentity();
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*(tf_buffer_));
@@ -75,6 +74,11 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->declare_parameter<double>("minimum_travel_distance", 0.5);
   parameters_->minimum_travel_heading =
     this->declare_parameter<double>("minimum_travel_heading", 0.5);
+
+  parameters_->lidar_voxelization_enable =
+    this->declare_parameter<bool>("lidar_voxelization_enable", true);
+  parameters_->lidar_voxelization_size =
+    this->declare_parameter<double>("lidar_voxelization_size", 0.2);
 
   parameters_->occ_map_resolution = this->declare_parameter<double>("occ_map_resolution", 0.05);
   parameters_->occ_map_padding = this->declare_parameter<int>("occ_map_padding", 2);
@@ -192,8 +196,6 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->declare_parameter<double>("loop_maximum_yaw_difference", 1.0);
   parameters_->loop_mahalanobis_threshold =
     this->declare_parameter<double>("loop_mahalanobis_threshold", 3.0);
-  parameters_->loop_minimum_xy_variance =
-    this->declare_parameter<double>("loop_minimum_xy_variance", 0.01);
   parameters_->loop_minimum_score = this->declare_parameter<double>("loop_minimum_score", 0.5);
   parameters_->loop_maximum_consistency_error =
     this->declare_parameter<double>("loop_maximum_consistency_error", 0.5);
@@ -271,6 +273,9 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   map_timer_ = this->create_wall_timer(
     std::chrono::milliseconds(1000), std::bind(&Ros2SlamWrapper::publishMapsTimerCallback, this),
     map_callback_group_);
+
+  // SLAM System
+  slam_system_ = std::make_unique<SlamSystem>(parameters_);
 }
 
 void Ros2SlamWrapper::processCSMParameters()
@@ -336,18 +341,8 @@ void Ros2SlamWrapper::processCSMParameters()
   parameters_->csm_use_distance_transform =
     this->declare_parameter<bool>("csm_use_distance_transform", false);
   parameters_->csm_use_tbb = this->declare_parameter<bool>("csm_use_tbb", false);
-  parameters_->csm_use_penalty = this->declare_parameter<bool>("csm_use_penalty", true);
-  parameters_->csm_distance_penalty_std_dev =
-    this->declare_parameter<double>("csm_distance_penalty_std_dev", 0.5);
-  parameters_->csm_angle_penalty_std_dev =
-    this->declare_parameter<double>("csm_angle_penalty_std_dev", 1.0);
 
-  if (
-    !std::isfinite(parameters_->csm_smear_deviation) || parameters_->csm_smear_deviation <= 0.0 ||
-    !std::isfinite(parameters_->csm_distance_penalty_std_dev) ||
-    parameters_->csm_distance_penalty_std_dev <= 0.0 ||
-    !std::isfinite(parameters_->csm_angle_penalty_std_dev) ||
-    parameters_->csm_angle_penalty_std_dev <= 0.0) {
+  if (!std::isfinite(parameters_->csm_smear_deviation) || parameters_->csm_smear_deviation <= 0.0) {
     throw std::runtime_error("CSM penalty parameters are outside their valid ranges");
   }
 }
@@ -372,6 +367,10 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.minimum_travel_distance = parameter.as_double();
     } else if (name == "minimum_travel_heading") {
       updated.minimum_travel_heading = parameter.as_double();
+    } else if (name == "lidar_voxelization_enable") {
+      updated.lidar_voxelization_enable = parameter.as_bool();
+    } else if (name == "lidar_voxelization_size") {
+      updated.lidar_voxelization_size = parameter.as_double();
     } else if (name == "occ_map_resolution") {
       updated.occ_map_resolution = parameter.as_double();
     } else if (name == "occ_map_padding") {
@@ -450,8 +449,6 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.loop_maximum_yaw_difference = parameter.as_double();
     } else if (name == "loop_mahalanobis_threshold") {
       updated.loop_mahalanobis_threshold = parameter.as_double();
-    } else if (name == "loop_minimum_xy_variance") {
-      updated.loop_minimum_xy_variance = parameter.as_double();
     } else if (name == "loop_minimum_score") {
       updated.loop_minimum_score = parameter.as_double();
     } else if (name == "loop_maximum_consistency_error") {
@@ -468,12 +465,6 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.csm_use_distance_transform = parameter.as_bool();
     } else if (name == "csm_use_tbb") {
       updated.csm_use_tbb = parameter.as_bool();
-    } else if (name == "csm_use_penalty") {
-      updated.csm_use_penalty = parameter.as_bool();
-    } else if (name == "csm_distance_penalty_std_dev") {
-      updated.csm_distance_penalty_std_dev = parameter.as_double();
-    } else if (name == "csm_angle_penalty_std_dev") {
-      updated.csm_angle_penalty_std_dev = parameter.as_double();
     }
   }
 

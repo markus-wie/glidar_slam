@@ -40,6 +40,9 @@ struct Parameters
   double minimum_travel_distance{0.5};
   double minimum_travel_heading{0.5};
 
+  bool lidar_voxelization_enable{true};
+  double lidar_voxelization_size{0.2};
+
   // Occupancy Grid Parameters
   double occ_map_resolution{0.05};
   int occ_map_padding{2};
@@ -89,9 +92,6 @@ struct Parameters
   bool csm_use_laplace_kernel{false};
   bool csm_use_distance_transform{false};
   bool csm_use_tbb{false};
-  bool csm_use_penalty{true};
-  double csm_distance_penalty_std_dev{0.5};
-  double csm_angle_penalty_std_dev{1.0};
   std::vector<CsmSearchStage> csm_search_stages;
   bool csm_debug_enable{false};
 
@@ -103,7 +103,6 @@ struct Parameters
   double loop_maximum_distance{2.0};
   double loop_maximum_yaw_difference{1.0};
   double loop_mahalanobis_threshold{3.0};
-  double loop_minimum_xy_variance{0.01};
   double loop_minimum_score{0.5};
   double loop_maximum_consistency_error{0.5};
   bool debug_timings{false};
@@ -138,6 +137,8 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
   os << "],\n"
      << "  minimum_travel_distance: " << p.minimum_travel_distance << ",\n"
      << "  minimum_travel_heading: " << p.minimum_travel_heading << ",\n"
+     << "  lidar_voxelization_enable: " << (p.lidar_voxelization_enable ? "true" : "false") << ",\n"
+     << "  lidar_voxelization_size: " << p.lidar_voxelization_size << ",\n"
      << "  occ_map_resolution: " << p.occ_map_resolution << ",\n"
      << "  occ_map_padding: " << p.occ_map_padding << ",\n"
      << "  submap_window_size: " << p.submap_window_size << ",\n"
@@ -193,9 +194,6 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  csm_use_distance_transform: " << (p.csm_use_distance_transform ? "true" : "false")
      << ",\n"
      << "  csm_use_tbb: " << (p.csm_use_tbb ? "true" : "false") << ",\n"
-     << "  csm_use_penalty: " << (p.csm_use_penalty ? "true" : "false") << ",\n"
-     << "  csm_distance_penalty_std_dev: " << p.csm_distance_penalty_std_dev << ",\n"
-     << "  csm_angle_penalty_std_dev: " << p.csm_angle_penalty_std_dev << ",\n"
      << "  csm_search_stages (size): " << p.csm_search_stages.size() << ",\n"
      << "  loop_debug_enable: " << (p.loop_debug_enable ? "true" : "false") << ",\n"
      << "  loop_input_queue_capacity: " << p.loop_input_queue_capacity << ",\n"
@@ -204,7 +202,6 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  loop_maximum_distance: " << p.loop_maximum_distance << ",\n"
      << "  loop_maximum_yaw_difference: " << p.loop_maximum_yaw_difference << ",\n"
      << "  loop_mahalanobis_threshold: " << p.loop_mahalanobis_threshold << ",\n"
-     << "  loop_minimum_xy_variance: " << p.loop_minimum_xy_variance << ",\n"
      << "  loop_minimum_score: " << p.loop_minimum_score << ",\n"
      << "  loop_maximum_consistency_error: " << p.loop_maximum_consistency_error << ",\n"
      << "  debug_timings: " << (p.debug_timings ? "true" : "false") << ",\n"

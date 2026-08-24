@@ -38,6 +38,12 @@ public:
   bool rebuild(std::vector<std::shared_ptr<const KeyFrame>> keyframes);
   std::shared_ptr<const GlobalMapSnapshot> getLatest() const;
 
+  static global_map::LocalMapData buildLocalOccupancy(
+    const PointCloudXYZ & scan, double resolution);
+  static void addLocalGroundMap(
+    global_map::LocalMapData & data, const PointCloudXYZRGBA & cloud,
+    const Parameters & parameters);
+
 private:
   struct AppliedContribution
   {
@@ -75,9 +81,5 @@ private:
   bool rebuild_requested_{false};
   std::uint64_t generation_{0};
 };
-
-global_map::LocalMapData buildLocalOccupancy(const PointCloudXYZ & scan, double resolution);
-void addLocalGroundMap(
-  global_map::LocalMapData & data, const PointCloudXYZRGBA & cloud, const Parameters & parameters);
 
 }  // namespace glidar_slam::core

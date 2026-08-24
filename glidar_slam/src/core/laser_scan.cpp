@@ -2,11 +2,11 @@
 
 namespace glidar_slam::core {
 
-LaserScan::LaserScan(PointCloudXYZ points) : points_(std::move(points))
+LaserScan::LaserScan(PointCloudXYZ && points) : points_(std::move(points))
 {
 }
 
-LaserScan::LaserScan(std::vector<Point2D> points) : points2d_(std::move(points))
+LaserScan::LaserScan(std::vector<Point2D> && points) : points2d_(std::move(points))
 {
 }
 

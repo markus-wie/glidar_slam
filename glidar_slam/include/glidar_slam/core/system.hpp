@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <set>
@@ -18,6 +19,7 @@
 #include "glidar_slam/core/map_database.hpp"
 #include "glidar_slam/core/parameters.hpp"
 #include "glidar_slam/core/sensor_data.hpp"
+#include "glidar_slam/core/submap_grid.hpp"
 #include "gtsam/geometry/Pose3.h"
 
 namespace glidar_slam::core {
@@ -51,6 +53,8 @@ public:
 private:
   bool shouldCreateKeyFrame(const gtsam::Pose3 & current_odom_pose) const;
 
+  void rebuildSubmap();
+
   bool processLoopClosureProposals();
 
   void dispatchFindLoopClosure(const KeyFrame & latest_keyframe);
@@ -67,6 +71,7 @@ private:
   std::unique_ptr<GraphOptimizer> graph_optimizer_;
   std::unique_ptr<LoopClosureDetector> loop_closure_detector_;
   std::unique_ptr<MapBuilder> map_builder_;
+  std::unique_ptr<SubmapGrid> submap_grid_;
 
   gtsam::Pose3 latest_map_to_odom_;
   mutable std::mutex latest_map_to_odom_mutex_;
