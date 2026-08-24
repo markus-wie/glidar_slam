@@ -12,42 +12,10 @@
 
 namespace glidar_slam::core {
 
-namespace {
-
-CsmResult::DebugImage toDebugImage(const LikelihoodField & field)
+CorrelativeScanMatcher::CorrelativeScanMatcher(const std::shared_ptr<Parameters> & params)
+: params_(params)
 {
-  CsmResult::DebugImage out;
-  out.origin_x = field.origin_x;
-  out.origin_y = field.origin_y;
-  out.resolution = field.resolution;
-  out.width = field.width;
-  out.height = field.height;
-
-  if (field.width <= 0 || field.height <= 0 || field.data.empty()) {
-    return out;
-  }
-
-  const auto min_max = std::minmax_element(field.data.begin(), field.data.end());
-  const double min_val = *min_max.first;
-  const double max_val = *min_max.second;
-  const double span = max_val - min_val;
-
-  out.pixels.resize(field.data.size(), 0);
-
-  if (span <= std::numeric_limits<double>::epsilon()) {
-    return out;
-  }
-
-  for (size_t i = 0; i < field.data.size(); ++i) {
-    const double normalized = (field.data[i] - min_val) / span;
-    const double scaled = std::clamp(normalized, 0.0, 1.0) * 255.0;
-    out.pixels[i] = static_cast<std::uint8_t>(std::lround(scaled));
-  }
-
-  return out;
 }
-
-}  // namespace
 
 double LikelihoodField::getScore(double x, double y) const
 {
@@ -79,14 +47,14 @@ double LikelihoodField::getScore(double x, double y) const
 }
 
 CsmResult CorrelativeScanMatcher::match(
-  const LaserScan & reference, const LaserScan & current, const Parameters & params)
+  const LaserScan & reference, const LaserScan & current) const
 {
   CsmResult result{};
   result.optimized_pose = current.world_pose;
   result.score = 0.0;
   result.covariance = Eigen::Matrix3d::Identity();
 
-  const std::vector<CsmSearchStage> & stages = params.csm_search_stages;
+  const std::vector<CsmSearchStage> & stages = params_->csm_search_stages;
 
   if (stages.empty() || reference.points.empty() || current.points.empty()) {
     result.covariance(0, 0) = 500.0;
@@ -99,7 +67,7 @@ CsmResult CorrelativeScanMatcher::match(
   fields.reserve(stages.size());
 
   for (const auto & stage : stages) {
-    fields.push_back(buildField(reference.points, stage.field_resolution, params));
+    fields.push_back(buildField(reference.points, stage.field_resolution));
   }
 
   const Pose2D initial_guess = current.world_pose;
@@ -109,47 +77,52 @@ CsmResult CorrelativeScanMatcher::match(
   std::vector<SearchResult> results;
   results.reserve(stages.size());
 
-  SAM_INFO(
-    "CSM initial guess: x={}, y={}, yaw={}, score={}", initial_guess.x, initial_guess.y,
-    initial_guess.yaw, initial_score);
+  if (params_->csm_debug_enable) {
+    SAM_INFO(
+      "CSM initial guess: x={}, y={}, yaw={}, score={}", initial_guess.x, initial_guess.y,
+      initial_guess.yaw, initial_score);
+  }
 
   for (std::size_t stage_index = 0; stage_index < stages.size(); ++stage_index) {
     const auto & stage = stages[stage_index];
 
-    SearchResult stage_result =
-      searchSpace(current.points, fields[stage_index], best_pose, stage, params);
+    SearchResult stage_result = searchSpace(current.points, fields[stage_index], best_pose, stage);
 
     best_pose = stage_result.best_pose;
 
     results.push_back(stage_result);
 
-    SAM_INFO(
-      "CSM stage {}: center=({}, {}, {}), result=({}, {}, {}), score={}, candidates={}, "
-      "steps=({}, {}, {}), windows=({}, {}, {})",
-      stage_index, best_pose.x, best_pose.y, best_pose.yaw, stage_result.best_pose.x,
-      stage_result.best_pose.y, stage_result.best_pose.yaw, stage_result.best_score,
-      stage_result.responses.size(), stage.translation_step, stage.translation_step,
-      stage.angular_step, stage.window_x, stage.window_y, stage.window_yaw);
+    if (params_->csm_debug_enable) {
+      SAM_INFO(
+        "CSM stage {}: center=({}, {}, {}), result=({}, {}, {}), score={}, candidates={}, "
+        "steps=({}, {}, {}), windows=({}, {}, {})",
+        stage_index, best_pose.x, best_pose.y, best_pose.yaw, stage_result.best_pose.x,
+        stage_result.best_pose.y, stage_result.best_pose.yaw, stage_result.best_score,
+        stage_result.responses.size(), stage.translation_step, stage.translation_step,
+        stage.angular_step, stage.window_x, stage.window_y, stage.window_yaw);
+    }
   }
 
   Eigen::Matrix3d cov = computeCovariance(results, stages);
 
-  SAM_INFO(
-    "CSM final pose: x={}, y={}, yaw={}, score={}, delta_x={}, delta_y={}, delta_yaw={}",
-    best_pose.x, best_pose.y, best_pose.yaw, results.back().best_score,
-    best_pose.x - initial_guess.x, best_pose.y - initial_guess.y,
-    Utils::normalizeAngle(best_pose.yaw - initial_guess.yaw));
+  if (params_->csm_debug_enable) {
+    SAM_INFO(
+      "CSM final pose: x={}, y={}, yaw={}, score={}, delta_x={}, delta_y={}, delta_yaw={}",
+      best_pose.x, best_pose.y, best_pose.yaw, results.back().best_score,
+      best_pose.x - initial_guess.x, best_pose.y - initial_guess.y,
+      Utils::normalizeAngle(best_pose.yaw - initial_guess.yaw));
+  }
 
   result.optimized_pose = best_pose;
   result.score = results.back().best_score;
   result.covariance = cov;
-  result.low_res_debug = toDebugImage(fields.front());
-  result.high_res_debug = toDebugImage(fields.back());
+  result.low_res_debug = CsmResult::toDebugImage(fields.front());
+  result.high_res_debug = CsmResult::toDebugImage(fields.back());
   return result;
 }
 
 LikelihoodField CorrelativeScanMatcher::buildField(
-  const std::vector<Point2D> & points, double resolution, const Parameters & params)
+  const std::vector<Point2D> & points, double resolution) const
 {
   LikelihoodField field;
   field.resolution = resolution;
@@ -159,9 +132,9 @@ LikelihoodField CorrelativeScanMatcher::buildField(
   }
 
   // define the max smear distance by a multiple of the deviation
-  const double max_smear_distance = params.csm_smear_deviation * 2.0;
+  const double max_smear_distance = params_->csm_smear_deviation * 2.0;
   double max_search_window = 0.0;
-  for (const auto & stage : params.csm_search_stages) {
+  for (const auto & stage : params_->csm_search_stages) {
     max_search_window = std::max({max_search_window, stage.window_x, stage.window_y});
   }
   const double padding = max_smear_distance + max_search_window;
@@ -190,7 +163,7 @@ LikelihoodField CorrelativeScanMatcher::buildField(
 
   // Splat points onto grid
   const int rad = std::ceil(max_smear_distance / resolution);
-  const double denom = 2.0 * params.csm_smear_deviation * params.csm_smear_deviation;
+  const double denom = 2.0 * params_->csm_smear_deviation * params_->csm_smear_deviation;
 
   for (const auto & p : points) {
     const int cx = static_cast<int>((p.x - field.origin_x) / resolution);
@@ -216,7 +189,7 @@ LikelihoodField CorrelativeScanMatcher::buildField(
 
 CorrelativeScanMatcher::SearchResult CorrelativeScanMatcher::searchSpace(
   const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & center,
-  const CsmSearchStage & stage, const Parameters & params)
+  const CsmSearchStage & stage) const
 {
   SearchResult result;
   result.center = center;
@@ -274,20 +247,20 @@ CorrelativeScanMatcher::SearchResult CorrelativeScanMatcher::searchSpace(
 
         score /= static_cast<double>(valid_points);
 
-        if (params.csm_use_penalty && score > 0.0) {
+        if (params_->csm_use_penalty && score > 0.0) {
           const double dx = x - center.x;
           const double dy = y - center.y;
           const double dyaw = Utils::normalizeAngle(yaw - center.yaw);
           const double distance_variance =
-            params.csm_distance_variance_penalty * params.csm_distance_variance_penalty;
+            params_->csm_distance_variance_penalty * params_->csm_distance_variance_penalty;
           const double angle_variance =
-            params.csm_angle_variance_penalty * params.csm_angle_variance_penalty;
+            params_->csm_angle_variance_penalty * params_->csm_angle_variance_penalty;
           const double distance_penalty = std::clamp(
             1.0 - 0.2 * (dx * dx + dy * dy) / std::max(distance_variance, 1e-12),
-            std::clamp(params.csm_minimum_distance_penalty, 0.0, 1.0), 1.0);
+            std::clamp(params_->csm_minimum_distance_penalty, 0.0, 1.0), 1.0);
           const double angle_penalty = std::clamp(
             1.0 - 0.2 * (dyaw * dyaw) / std::max(angle_variance, 1e-12),
-            std::clamp(params.csm_minimum_angle_penalty, 0.0, 1.0), 1.0);
+            std::clamp(params_->csm_minimum_angle_penalty, 0.0, 1.0), 1.0);
           score *= distance_penalty * angle_penalty;
         }
 
@@ -323,7 +296,7 @@ CorrelativeScanMatcher::SearchResult CorrelativeScanMatcher::searchSpace(
 }
 
 double CorrelativeScanMatcher::evaluatePose(
-  const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & pose)
+  const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & pose) const
 {
   double score = 0.0;
   double c = std::cos(pose.yaw);
@@ -345,7 +318,7 @@ double CorrelativeScanMatcher::evaluatePose(
 }
 
 Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
-  const std::vector<SearchResult> & results, const std::vector<CsmSearchStage> & stages)
+  const std::vector<SearchResult> & results, const std::vector<CsmSearchStage> & stages) const
 {
   constexpr double max_variance = 500.0;
 
@@ -451,6 +424,39 @@ Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
 
   covariance = 0.5 * (covariance + covariance.transpose());
   return covariance;
+}
+
+CsmResult::DebugImage CsmResult::toDebugImage(const LikelihoodField & field)
+{
+  CsmResult::DebugImage out;
+  out.origin_x = field.origin_x;
+  out.origin_y = field.origin_y;
+  out.resolution = field.resolution;
+  out.width = field.width;
+  out.height = field.height;
+
+  if (field.width <= 0 || field.height <= 0 || field.data.empty()) {
+    return out;
+  }
+
+  const auto min_max = std::minmax_element(field.data.begin(), field.data.end());
+  const double min_val = *min_max.first;
+  const double max_val = *min_max.second;
+  const double span = max_val - min_val;
+
+  out.pixels.resize(field.data.size(), 0);
+
+  if (span <= std::numeric_limits<double>::epsilon()) {
+    return out;
+  }
+
+  for (size_t i = 0; i < field.data.size(); ++i) {
+    const double normalized = (field.data[i] - min_val) / span;
+    const double scaled = std::clamp(normalized, 0.0, 1.0) * 255.0;
+    out.pixels[i] = static_cast<std::uint8_t>(std::lround(scaled));
+  }
+
+  return out;
 }
 
 }  // namespace glidar_slam::core

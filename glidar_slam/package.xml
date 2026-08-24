@@ -14,9 +14,10 @@
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>
-  <depend>opencv</depend>
+  <depend>libopencv-dev</depend>
   <depend>tf2_ros</depend>
   <depend>gtsam</depend>
+  <depend>libnanoflann-dev</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

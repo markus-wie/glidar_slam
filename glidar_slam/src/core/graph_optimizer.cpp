@@ -11,7 +11,7 @@
 
 namespace glidar_slam::core {
 
-GraphOptimizer::GraphOptimizer(std::shared_ptr<Parameters> params)
+GraphOptimizer::GraphOptimizer(const std::shared_ptr<Parameters> & params)
 : params_(params), isam_(isam_params_), latest_key_(0), latest_timestamp_(0), initialized_(false)
 {
   isam_params_.relinearizeThreshold = params->isam_relinearizeThreshold;
@@ -47,7 +47,7 @@ uint64_t GraphOptimizer::addRelativeFactor(
 
   pending_factors_.add(gtsam::BetweenFactor<gtsam::Pose3>(
     from_key, to_key, relative_pose, covarianceFromMatrix(covariance)));
-  if (!pending_values_.exists(to_key)) {
+  if (!pending_values_.exists(to_key) && !current_estimates_.exists(to_key)) {
     const gtsam::Pose3 from_pose = current_estimates_.exists(from_key)
                                      ? current_estimates_.at<gtsam::Pose3>(from_key)
                                      : getLatestPose();

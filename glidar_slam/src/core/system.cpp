@@ -10,9 +10,160 @@
 
 namespace glidar_slam::core {
 
-namespace {
+SlamSystem::SlamSystem(const std::shared_ptr<Parameters> & parameters) : parameters_(parameters)
+{
+  map_database_ = std::make_shared<MapDatabase>();
+  graph_optimizer_ = std::make_unique<GraphOptimizer>(parameters_);
+  scan_matcher_ = std::make_unique<CorrelativeScanMatcher>(parameters_);
+  loop_closure_detector_ = std::make_unique<LoopClosureDetector>(parameters_, map_database_);
+  loop_closure_detector_->start();
+}
 
-void appendKartoVisiblePoints(
+SlamSystem::~SlamSystem()
+{
+  loop_closure_detector_->stop();
+}
+
+SlamSystem::LaserScanOutput SlamSystem::handleLaserScan(
+  double timestamp, const PointCloudXYZ & scan, const gtsam::Pose3 & odom_pose,
+  const gtsam::Matrix66 & odom_covariance)
+{
+  if (scan.empty()) {
+    return {};
+  }
+
+  processLoopClosureProposals();
+
+  const gtsam::Pose3 latest_odom_pose = projectPlanar(odom_pose);
+
+  initializeIfNeeded(timestamp, scan, latest_odom_pose);
+
+  std::shared_ptr<const KeyFrame> reference_keyframe = map_database_->getLatestKeyFrame();
+
+  // Get relative odometry delta and apply to the reference keyframes world pose
+  const gtsam::Pose3 raw_odom_delta =
+    reference_keyframe->odom_pose.inverse().compose(latest_odom_pose);
+  const gtsam::Pose3 current_guess = reference_keyframe->pose.compose(raw_odom_delta);
+
+  // Check if we should spawn a new keyframe based on motion thresholds
+  if (!shouldCreateKeyFrame(latest_odom_pose)) {
+    return {current_guess, std::nullopt, std::nullopt};
+  }
+
+  uint64_t next_keyframe_key = map_database_->incrementNextKey();
+
+  // Construct the Current Scan (with world_pose acting as the initial guess)
+  LaserScan current_csm_scan;
+  current_csm_scan.id = next_keyframe_key;
+  current_csm_scan.timestamp = timestamp;
+  current_csm_scan.odom_pose = Utils::toPose2D(current_guess);
+  current_csm_scan.world_pose = Utils::toPose2D(current_guess);
+
+  for (const auto & pt : scan) {
+    current_csm_scan.points.push_back({pt.x, pt.y});
+  }
+
+  // Construct the Submap Reference Scan
+  // Aggregate the points of the last N keyframes transformed into the world frame
+  LaserScan submap_reference;
+  submap_reference.id = reference_keyframe->key;
+  submap_reference.timestamp = reference_keyframe->timestamp;
+  submap_reference.world_pose = Utils::toPose2D(reference_keyframe->pose);
+
+  std::vector<std::shared_ptr<const KeyFrame>> keyframes = map_database_->getAllKeyFrames();
+
+  size_t start_idx = static_cast<int>(keyframes.size()) > parameters_->submap_window_size
+                       ? static_cast<int>(keyframes.size()) - parameters_->submap_window_size
+                       : 0;
+
+  const Point2D viewpoint{current_guess.x(), current_guess.y()};
+
+  for (size_t i = start_idx; i < keyframes.size(); ++i) {
+    const KeyFrame & kf = *keyframes.at(i);
+    appendVisiblePoints(kf.scan, kf.pose, viewpoint, submap_reference.points);
+  }
+
+  // Execute the Correlative Scan Matcher
+  // This yields an optimized world pose and a 3x3 covariance matrix
+  CsmResult csm_result = scan_matcher_->match(submap_reference, current_csm_scan);
+
+  // Map the 3x3 CSM Covariance (x, y, yaw) to a 6x6 GTSAM Covariance Matrix
+  gtsam::Matrix66 csm_covariance = gtsam::Matrix66::Zero();
+
+  // Inflate unobservable dimensions
+  constexpr double INF_VAR = 1e6;
+
+  // Diagonal of csm_result.covariance:
+  // [ x-x, y-y, yaw-yaw ]
+  // gtsam covariance layout is [roll, pitch, yaw, x, y, z]
+  csm_covariance(0, 0) = INF_VAR;                      // roll-roll
+  csm_covariance(1, 1) = INF_VAR;                      // pitch-pitch
+  csm_covariance(2, 2) = csm_result.covariance(2, 2);  // yaw-yaw
+  csm_covariance(3, 3) = csm_result.covariance(0, 0);  // x-x
+  csm_covariance(4, 4) = csm_result.covariance(1, 1);  // y-y
+  csm_covariance(5, 5) = INF_VAR;                      // z-z
+  csm_covariance(3, 4) = csm_result.covariance(0, 1);  // x-y
+  csm_covariance(4, 3) = csm_result.covariance(1, 0);  // y-x
+  csm_covariance(3, 2) = csm_result.covariance(0, 2);  // x-yaw
+  csm_covariance(2, 3) = csm_result.covariance(2, 0);  // yaw-x
+  csm_covariance(4, 2) = csm_result.covariance(1, 2);  // y-yaw
+  csm_covariance(2, 4) = csm_result.covariance(2, 1);  // yaw-y
+
+  if (parameters_->csm_debug_enable) {
+    SAM_INFO(
+      "CSM Covariance (diagonal): x={}, y={}, yaw={}", csm_result.covariance(0, 0),
+      csm_result.covariance(1, 1), csm_result.covariance(2, 2));
+  }
+
+  // Convert optimized absolute Pose2D back to gtsam::Pose3
+  gtsam::Pose3 optimized_world_pose = Utils::toPose3(csm_result.optimized_pose);
+
+  // Calculate the relative transform factor for the graph
+  // Factor = T_world_ref.inverse() * T_world_optimized_curr
+  const gtsam::Pose3 csm_pose_delta =
+    reference_keyframe->pose.inverse().compose(optimized_world_pose);
+
+  // Add the Wheel Odometry Factor
+  graph_optimizer_->addRelativeFactor(
+    reference_keyframe->key, next_keyframe_key, raw_odom_delta, odom_covariance);
+
+  // Add the Scan Matching Factor (in parallel)
+  graph_optimizer_->addRelativeFactor(
+    reference_keyframe->key, next_keyframe_key, csm_pose_delta, csm_covariance);
+
+  gtsam::Values updated_states = graph_optimizer_->optimize();
+
+  gtsam::Pose3 optimized_pose = graph_optimizer_->getLatestPose();
+
+  gtsam::Matrix66 optimized_covariance =
+    graph_optimizer_->getMarginalCovariance(next_keyframe_key).value_or(gtsam::Matrix66::Zero());
+
+  if (parameters_->csm_debug_enable) {
+    SAM_INFO(
+      "Covariance (diagonal) of latest pose: roll={}, pitch={}, yaw={}, x={}, y={}, z={}",
+      optimized_covariance(0, 0), optimized_covariance(1, 1), optimized_covariance(2, 2),
+      optimized_covariance(3, 3), optimized_covariance(4, 4), optimized_covariance(5, 5));
+  }
+
+  const std::shared_ptr<KeyFrame> new_keyframe = std::make_shared<KeyFrame>(
+    next_keyframe_key, timestamp, optimized_pose, latest_odom_pose, scan, optimized_covariance);
+
+  map_database_->addKeyFrame(new_keyframe);
+
+  map_database_->updatePoses(updated_states);  // maybe call, maybe dont
+
+  {
+    std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
+    gtsam::Pose3 odom_to_base = latest_odom_pose.inverse();
+    latest_map_to_odom_ = optimized_pose.compose(odom_to_base);
+  }
+
+  dispatchFindLoopClosure(*new_keyframe);
+
+  return {optimized_pose, csm_result.low_res_debug, csm_result.high_res_debug};
+}
+
+void SlamSystem::appendVisiblePoints(
   const PointCloudXYZ & scan, const gtsam::Pose3 & pose, const Point2D & viewpoint,
   std::vector<Point2D> & output)
 {
@@ -66,174 +217,38 @@ void appendKartoVisiblePoints(
   }
 }
 
-}  // namespace
-
-SlamSystem::SlamSystem(const std::shared_ptr<Parameters> & parameters)
-: parameters_(parameters), graph_optimizer_(parameters), next_keyframe_key_(0)
+void SlamSystem::processLoopClosureProposals()
 {
+  std::vector<LoopClosureProposal> proposals;
+
+  while (const auto proposal = loop_closure_detector_->tryPopProposal()) {
+    if (!proposal.has_value()) {
+      break;
+    }
+    proposals.emplace_back(proposal.value());
+  }
+
+  for (const auto & proposal : proposals) {
+    graph_optimizer_->addRelativeFactor(
+      proposal.from_key, proposal.to_key, proposal.relative_pose, proposal.covariance);
+
+    SAM_INFO(
+      "Loop closure accepted: from={}, to={}, score={}", proposal.from_key, proposal.to_key,
+      proposal.score);
+  }
 }
 
-SlamSystem::LaserScanOutput SlamSystem::handleLaserScan(
-  double timestamp, const PointCloudXYZ & scan, const gtsam::Pose3 & odom_pose,
-  const gtsam::Matrix66 & odom_covariance)
+void SlamSystem::dispatchFindLoopClosure(const KeyFrame & latest_keyframe)
 {
-  if (scan.empty()) {
-    return {};
-  }
-
-  const gtsam::Pose3 latest_odom_pose = projectPlanar(odom_pose);
-
-  initializeIfNeeded(timestamp, scan, latest_odom_pose);
-  if (keyframes_.empty()) {
-    return {};
-  }
-
-  std::shared_ptr<KeyFrame> reference_keyframe = keyframes_.back();
-
-  // Get relative odometry delta and apply to the reference keyframes world pose
-  const gtsam::Pose3 raw_odom_delta =
-    reference_keyframe->odom_pose.inverse().compose(latest_odom_pose);
-  const gtsam::Pose3 current_guess = reference_keyframe->pose.compose(raw_odom_delta);
-
-  // Check if we should spawn a new keyframe based on motion thresholds
-  if (!shouldCreateKeyFrame(latest_odom_pose)) {
-    return {current_guess, std::nullopt, std::nullopt};
-  }
-
-  // Construct the Current Scan (with world_pose acting as the initial guess)
-  LaserScan current_csm_scan;
-  current_csm_scan.id = next_keyframe_key_;
-  current_csm_scan.timestamp = timestamp;
-  current_csm_scan.odom_pose = Utils::toPose2D(current_guess);
-  current_csm_scan.world_pose = Utils::toPose2D(current_guess);
-
-  for (const auto & pt : scan) {
-    current_csm_scan.points.push_back({pt.x, pt.y});
-  }
-
-  // Construct the Submap Reference Scan
-  // Aggregate the points of the last N keyframes transformed into the world frame
-  LaserScan submap_reference;
-  submap_reference.id = reference_keyframe->key;
-  submap_reference.timestamp = reference_keyframe->timestamp;
-  submap_reference.world_pose = Utils::toPose2D(reference_keyframe->pose);
-
-  size_t start_idx = static_cast<int>(keyframes_.size()) > parameters_->submap_window_size
-                       ? static_cast<int>(keyframes_.size()) - parameters_->submap_window_size
-                       : 0;
-
-  const Point2D viewpoint{current_guess.x(), current_guess.y()};
-  {
-    std::lock_guard<std::mutex> lock(keyframes_mutex_);
-
-    for (size_t i = start_idx; i < keyframes_.size(); ++i) {
-      const KeyFrame & kf = *keyframes_.at(i);
-      appendKartoVisiblePoints(kf.scan, kf.pose, viewpoint, submap_reference.points);
-    }
-  }
-
-  // Execute the Correlative Scan Matcher
-  // This yields an optimized world pose and a 3x3 covariance matrix
-  CsmResult csm_result =
-    CorrelativeScanMatcher::match(submap_reference, current_csm_scan, *parameters_);
-
-  // Map the 3x3 CSM Covariance (x, y, yaw) to a 6x6 GTSAM Covariance Matrix
-  gtsam::Matrix66 csm_covariance = gtsam::Matrix66::Zero();
-
-  // Inflate unobservable dimensions
-  constexpr double INF_VAR = 1e6;
-
-  // Diagonal of csm_result.covariance:
-  // [ x-x, y-y, yaw-yaw ]
-  // gtsam covariance layout is [roll, pitch, yaw, x, y, z]
-  csm_covariance(0, 0) = INF_VAR;                      // roll-roll
-  csm_covariance(1, 1) = INF_VAR;                      // pitch-pitch
-  csm_covariance(2, 2) = csm_result.covariance(2, 2);  // yaw-yaw
-  csm_covariance(3, 3) = csm_result.covariance(0, 0);  // x-x
-  csm_covariance(4, 4) = csm_result.covariance(1, 1);  // y-y
-  csm_covariance(5, 5) = INF_VAR;                      // z-z
-  csm_covariance(3, 4) = csm_result.covariance(0, 1);  // x-y
-  csm_covariance(4, 3) = csm_result.covariance(1, 0);  // y-x
-  csm_covariance(3, 2) = csm_result.covariance(0, 2);  // x-yaw
-  csm_covariance(2, 3) = csm_result.covariance(2, 0);  // yaw-x
-  csm_covariance(4, 2) = csm_result.covariance(1, 2);  // y-yaw
-  csm_covariance(2, 4) = csm_result.covariance(2, 1);  // yaw-y
-
-  SAM_INFO(
-    "CSM Covariance (diagonal): x={}, y={}, yaw={}", csm_result.covariance(0, 0),
-    csm_result.covariance(1, 1), csm_result.covariance(2, 2));
-
-  // Convert optimized absolute Pose2D back to gtsam::Pose3
-  gtsam::Pose3 optimized_world_pose = Utils::toPose3(csm_result.optimized_pose);
-
-  // Calculate the relative transform factor for the graph
-  // Factor = T_world_ref.inverse() * T_world_optimized_curr
-  const gtsam::Pose3 csm_pose_delta =
-    reference_keyframe->pose.inverse().compose(optimized_world_pose);
-
-  // Add the Wheel Odometry Factor
-  graph_optimizer_.addRelativeFactor(
-    reference_keyframe->key, next_keyframe_key_, raw_odom_delta, odom_covariance);
-
-  // Add the Scan Matching Factor (in parallel)
-  graph_optimizer_.addRelativeFactor(
-    reference_keyframe->key, next_keyframe_key_, csm_pose_delta, csm_covariance);
-
-  gtsam::Values updated_states = graph_optimizer_.optimize();
-
-  synchronizeKeyframes();
-
-  gtsam::Pose3 optimized_pose = graph_optimizer_.getLatestPose();
-
-  gtsam::Matrix66 optimized_covariance =
-    graph_optimizer_.getMarginalCovariance(next_keyframe_key_).value_or(gtsam::Matrix66::Zero());
-
-  SAM_INFO(
-    "Covariance (diagonal) of latest pose: roll={}, pitch={}, yaw={}, x={}, y={}, z={}",
-    optimized_covariance(0, 0), optimized_covariance(1, 1), optimized_covariance(2, 2),
-    optimized_covariance(3, 3), optimized_covariance(4, 4), optimized_covariance(5, 5));
-
-  {
-    std::lock_guard<std::mutex> lock(keyframes_mutex_);
-    keyframes_.emplace_back(std::make_shared<KeyFrame>(
-      next_keyframe_key_, timestamp, optimized_pose, latest_odom_pose, scan, optimized_covariance));
-  }
-  ++next_keyframe_key_;
-
-  {
-    std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
-    gtsam::Pose3 odom_to_base = latest_odom_pose.inverse();
-    latest_map_to_odom_ = optimized_pose.compose(odom_to_base);
-  }
-
-  return {optimized_pose, csm_result.low_res_debug, csm_result.high_res_debug};
-}
-
-void SlamSystem::synchronizeKeyframes()
-{
-  std::lock_guard<std::mutex> lock(keyframes_mutex_);
-
-  const gtsam::Values & current_estimates = graph_optimizer_.getCurrentEstimates();
-
-  for (const std::shared_ptr<KeyFrame> & keyframe : keyframes_) {
-    if (current_estimates.exists(keyframe->key)) {
-      keyframe->pose = current_estimates.at<gtsam::Pose3>(keyframe->key);
-    }
-  }
-
-  if (!keyframes_.empty()) {
-    std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
-    const KeyFrame & latest_kf = *keyframes_.back();
-    // Correction = T_map * T_odom^-1
-    latest_map_to_odom_ = latest_kf.pose.compose(latest_kf.odom_pose.inverse());
-  }
+  KeyFrame snapshot(latest_keyframe);
+  loop_closure_detector_->submit(std::move(snapshot));
 }
 
 PointCloudXYZ SlamSystem::getMapCloud() const
 {
   PointCloudXYZ map_cloud;
 
-  for (const std::shared_ptr<KeyFrame> & keyframe : keyframes_) {
+  for (const std::shared_ptr<const KeyFrame> & keyframe : map_database_->getAllKeyFrames()) {
     const gtsam::Vector3 rpy = keyframe->pose.rotation().rpy();
     const Eigen::AngleAxisf roll_angle(static_cast<float>(rpy.x()), Eigen::Vector3f::UnitX());
     const Eigen::AngleAxisf pitch_angle(static_cast<float>(rpy.y()), Eigen::Vector3f::UnitY());
@@ -260,9 +275,10 @@ PointCloudXYZ SlamSystem::getMapCloud() const
 std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> SlamSystem::getTransformedKeyFrameScans() const
 {
   std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> out;
-  out.reserve(keyframes_.size());
+  const auto keyframes = map_database_->getAllKeyFrames();
+  out.reserve(keyframes.size());
 
-  for (const std::shared_ptr<KeyFrame> & keyframe : keyframes_) {
+  for (const std::shared_ptr<const KeyFrame> & keyframe : keyframes) {
     const gtsam::Vector3 rpy = keyframe->pose.rotation().rpy();
     const Eigen::AngleAxisf roll_angle(static_cast<float>(rpy.x()), Eigen::Vector3f::UnitX());
     const Eigen::AngleAxisf pitch_angle(static_cast<float>(rpy.y()), Eigen::Vector3f::UnitY());
@@ -285,9 +301,7 @@ std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> SlamSystem::getTransformedKe
 
 std::vector<std::shared_ptr<const KeyFrame>> SlamSystem::getKeyFrames() const
 {
-  std::lock_guard lock(keyframes_mutex_);
-  std::vector<std::shared_ptr<const KeyFrame>> keyframes_copy(keyframes_.begin(), keyframes_.end());
-  return keyframes_copy;
+  return map_database_->getAllKeyFrames();
 }
 
 gtsam::Pose3 SlamSystem::projectPlanar(const gtsam::Pose3 & pose)
@@ -314,25 +328,27 @@ double SlamSystem::yawDistance(const gtsam::Pose3 & lhs, const gtsam::Pose3 & rh
 void SlamSystem::initializeIfNeeded(
   double timestamp, const PointCloudXYZ & scan, const gtsam::Pose3 & odom_pose)
 {
-  if (!keyframes_.empty()) {
+  if (map_database_->size() > 0) {
     return;
   }
 
   const gtsam::Pose3 initial_pose = gtsam::Pose3();
-  graph_optimizer_.initialize(initial_pose, static_cast<uint64_t>(timestamp * 1e6));
-  keyframes_.emplace_back(std::make_shared<KeyFrame>(0, timestamp, initial_pose, odom_pose, scan));
-  next_keyframe_key_ = 1;
+  graph_optimizer_->initialize(initial_pose, static_cast<uint64_t>(timestamp * 1e6));
+  auto new_keyframe = std::make_shared<KeyFrame>(
+    map_database_->incrementNextKey(), timestamp, initial_pose, odom_pose, scan);
+  map_database_->addKeyFrame(new_keyframe);
 
   SAM_INFO("System initialized with first keyframe at timestamp: {}", timestamp);
 }
 
 bool SlamSystem::shouldCreateKeyFrame(const gtsam::Pose3 & current_odom_pose) const
 {
-  if (keyframes_.empty()) {
+  const auto & keyframes = map_database_->getAllKeyFrames();
+  if (keyframes.empty()) {
     return true;
   }
 
-  std::shared_ptr<KeyFrame> reference_keyframe = keyframes_.back();
+  std::shared_ptr<const KeyFrame> reference_keyframe = keyframes.back();
 
   double trans_dist = translationDistance(reference_keyframe->odom_pose, current_odom_pose);
   bool should_create_trans = trans_dist > parameters_->minimum_travel_distance;

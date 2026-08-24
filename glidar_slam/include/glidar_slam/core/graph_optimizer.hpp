@@ -15,7 +15,7 @@ namespace glidar_slam::core {
 class GraphOptimizer
 {
 public:
-  GraphOptimizer(std::shared_ptr<Parameters> params);
+  GraphOptimizer(const std::shared_ptr<Parameters> & params);
 
   void initialize(const gtsam::Pose3 & initial_pose, uint64_t timestamp);
 

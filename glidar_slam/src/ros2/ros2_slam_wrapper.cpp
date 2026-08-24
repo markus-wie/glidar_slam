@@ -109,13 +109,30 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->declare_parameter<double>("minimum_travel_distance", 0.5);
   parameters_->minimum_travel_heading =
     this->declare_parameter<double>("minimum_travel_heading", 0.5);
-  parameters_->enable_csm_debug_images =
-    this->declare_parameter<bool>("enable_csm_debug_images", false);
 
   parameters_->occ_map_resolution = this->declare_parameter<double>("occ_map_resolution", 0.05);
   parameters_->occ_map_padding = this->declare_parameter<int>("occ_map_padding", 2);
 
   parameters_->submap_window_size = this->declare_parameter<int>("submap_window_size", 5);
+
+  parameters_->loop_debug_enable = this->declare_parameter<bool>("loop_debug_enable", false);
+  parameters_->loop_input_queue_capacity =
+    static_cast<std::size_t>(this->declare_parameter<int>("loop_input_queue_capacity", 2));
+  parameters_->loop_output_queue_capacity =
+    static_cast<std::size_t>(this->declare_parameter<int>("loop_output_queue_capacity", 8));
+  parameters_->loop_minimum_key_separation =
+    static_cast<uint64_t>(this->declare_parameter<int>("loop_minimum_key_separation", 20));
+  parameters_->loop_maximum_distance =
+    this->declare_parameter<double>("loop_maximum_distance", 2.0);
+  parameters_->loop_maximum_yaw_difference =
+    this->declare_parameter<double>("loop_maximum_yaw_difference", 1.0);
+  parameters_->loop_mahalanobis_threshold =
+    this->declare_parameter<double>("loop_mahalanobis_threshold", 3.0);
+  parameters_->loop_minimum_xy_variance =
+    this->declare_parameter<double>("loop_minimum_xy_variance", 0.01);
+  parameters_->loop_minimum_score = this->declare_parameter<double>("loop_minimum_score", 0.5);
+  parameters_->loop_maximum_consistency_error =
+    this->declare_parameter<double>("loop_maximum_consistency_error", 0.5);
 
   processCSMParameters();
 
@@ -147,6 +164,10 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
 
 void Ros2SlamWrapper::processCSMParameters()
 {
+  parameters_->csm_debug_enable = this->declare_parameter<bool>("csm_debug_enable", false);
+  parameters_->csm_debug_images_enable =
+    this->declare_parameter<bool>("csm_debug_images_enable", false);
+
   const auto stage_resolutions =
     this->declare_parameter<std::vector<double>>("csm_stage_resolutions", std::vector<double>{});
   const auto stage_translation_steps = this->declare_parameter<std::vector<double>>(
@@ -453,7 +474,7 @@ void Ros2SlamWrapper::publishMapToOdom()
 void Ros2SlamWrapper::publishDebugImage(
   const SlamSystem::LaserScanOutput & output, const rclcpp::Time & stamp)
 {
-  if (!parameters_->enable_csm_debug_images) {
+  if (!parameters_->csm_debug_images_enable) {
     return;
   }
 

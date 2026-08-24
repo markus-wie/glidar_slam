@@ -21,6 +21,19 @@ struct LaserScan
   Pose2D world_pose;
 };
 
+struct LikelihoodField
+{
+  std::vector<double> data;
+  double origin_x;
+  double origin_y;
+  int width;
+  int height;
+  double resolution;
+
+  // Bilinear interpolation for sub-grid scoring
+  double getScore(double x, double y) const;
+};
+
 struct CsmResult
 {
   Pose2D optimized_pose;
@@ -38,26 +51,16 @@ struct CsmResult
 
   DebugImage low_res_debug;
   DebugImage high_res_debug;
-};
 
-struct LikelihoodField
-{
-  std::vector<double> data;
-  double origin_x;
-  double origin_y;
-  int width;
-  int height;
-  double resolution;
-
-  // Bilinear interpolation for sub-grid scoring
-  double getScore(double x, double y) const;
+  static CsmResult::DebugImage toDebugImage(const LikelihoodField & field);
 };
 
 class CorrelativeScanMatcher
 {
 public:
-  static CsmResult match(
-    const LaserScan & reference, const LaserScan & current, const Parameters & params);
+  CorrelativeScanMatcher(const std::shared_ptr<Parameters> & params);
+
+  CsmResult match(const LaserScan & reference, const LaserScan & current) const;
 
 private:
   struct SearchResponse
@@ -74,18 +77,19 @@ private:
     std::vector<SearchResponse> responses;
   };
 
-  static LikelihoodField buildField(
-    const std::vector<Point2D> & points, double resolution, const Parameters & params);
+  LikelihoodField buildField(const std::vector<Point2D> & points, double resolution) const;
 
-  static SearchResult searchSpace(
+  SearchResult searchSpace(
     const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & center,
-    const CsmSearchStage & stage, const Parameters & params);
+    const CsmSearchStage & stage) const;
 
-  static double evaluatePose(
-    const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & pose);
+  double evaluatePose(
+    const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & pose) const;
 
-  static Eigen::Matrix3d computeCovariance(
-    const std::vector<SearchResult> & results, const std::vector<CsmSearchStage> & stages);
+  Eigen::Matrix3d computeCovariance(
+    const std::vector<SearchResult> & results, const std::vector<CsmSearchStage> & stages) const;
+
+  std::shared_ptr<Parameters> params_;
 };
 
 }  // namespace glidar_slam::core

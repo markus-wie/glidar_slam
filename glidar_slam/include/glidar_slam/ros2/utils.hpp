@@ -5,6 +5,7 @@
 #include "rclcpp/time.hpp"
 
 namespace glidar_slam::ros2 {
+
 class Utils
 {
 public:
@@ -14,4 +15,5 @@ public:
     const glidar_slam::core::OccupancyGrid & core_grid, const std::string & frame_id,
     const rclcpp::Time & stamp);
 };
+
 }  // namespace glidar_slam::ros2

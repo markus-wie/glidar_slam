@@ -1,4 +1,5 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.27)
+set(CMAKE_POLICY_DEFAULT_CMP0144 NEW)
 project(glidar_slam)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -17,14 +18,17 @@ find_package(cv_bridge REQUIRED)
 find_package(GTSAM REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common registration)
 find_package(Eigen3 REQUIRED)
+find_package(nanoflann REQUIRED)
 
 include_directories(include)
 
 add_library(${PROJECT_NAME}_core SHARED
   src/core/correlative_scan_matcher.cpp
   src/core/graph_optimizer.cpp
+  src/core/loop_closure.cpp
   src/core/system.cpp
   src/core/occupancy_grid.cpp
+  src/core/map_database.cpp
 )
 
 target_precompile_headers(${PROJECT_NAME}_core PUBLIC
@@ -53,10 +57,11 @@ target_include_directories(${PROJECT_NAME}_core SYSTEM PUBLIC
 
 target_compile_features(${PROJECT_NAME}_core PUBLIC cxx_std_17)
 target_compile_definitions(${PROJECT_NAME}_core PUBLIC ${PCL_DEFINITIONS})
-target_link_libraries(${PROJECT_NAME}_core 
-  gtsam 
+target_link_libraries(${PROJECT_NAME}_core
+  gtsam
   ${PCL_LIBRARIES}
   ${Eigen3_LIBRARIES}
+  nanoflann::nanoflann
 )
 
 add_library(${PROJECT_NAME}_ros2 SHARED
@@ -94,24 +99,24 @@ target_link_libraries(${PROJECT_NAME}_ros2
   tf2_ros::tf2_ros
   cv_bridge::cv_bridge
   ${OpenCV_LIBS}
-  gtsam 
+  gtsam
   ${PCL_LIBRARIES}
 )
 
-target_link_libraries(${PROJECT_NAME}_ros2 
-  ${PROJECT_NAME}_core 
-  gtsam 
+target_link_libraries(${PROJECT_NAME}_ros2
+  ${PROJECT_NAME}_core
+  gtsam
 )
 
 add_executable(${PROJECT_NAME}_node src/main.cpp)
 target_compile_features(${PROJECT_NAME}_node PUBLIC cxx_std_17)
 target_link_libraries(${PROJECT_NAME}_node
-  rclcpp::rclcpp  
+  rclcpp::rclcpp
   ${PROJECT_NAME}_ros2
 )
 
 install(
-  DIRECTORY include/ 
+  DIRECTORY include/
   DESTINATION include
 )
 

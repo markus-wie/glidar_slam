@@ -31,7 +31,6 @@ inline LogCallback active_sink = [](LogLevel level, std::string_view msg) {
   }
 };
 
-// Helper to replace the first occurrence of "{}" with a value
 template <typename T>
 inline void format_helper(std::ostringstream & oss, std::string_view & str, const T & value)
 {
@@ -42,7 +41,6 @@ inline void format_helper(std::ostringstream & oss, std::string_view & str, cons
   }
 }
 
-// Variadic template using C++17 fold expressions to process all arguments
 template <typename... Args>
 inline std::string format(std::string_view fmt, const Args &... args)
 {
@@ -50,8 +48,8 @@ inline std::string format(std::string_view fmt, const Args &... args)
     return std::string(fmt);
   } else {
     std::ostringstream oss;
-    (format_helper(oss, fmt, args), ...);  // Fold expression over arguments
-    oss << fmt;                            // Append any remaining string
+    (format_helper(oss, fmt, args), ...);
+    oss << fmt;
     return oss.str();
   }
 }
@@ -75,7 +73,6 @@ inline void log_dispatch(LogLevel level, std::string_view msg)
 }
 }  // namespace glidar_slam::log
 
-// __VA_ARGS__ cleanly captures BOTH the format string and the formatting arguments.
 #define SAM_LOG(level, ...)                                                                 \
   ((static_cast<int>(level) >= static_cast<int>(glidar_slam::log::detail::current_level))   \
      ? glidar_slam::log::log_dispatch(level, glidar_slam::log::detail::format(__VA_ARGS__)) \
