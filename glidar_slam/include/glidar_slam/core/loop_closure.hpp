@@ -27,7 +27,6 @@ struct LoopClosureProposal
   gtsam::Matrix66 covariance{gtsam::Matrix66::Zero()};
   double score{0.0};
   double overlap{0.0};
-  double consistency_error{0.0};
 };
 
 class LoopClosureDetector
@@ -45,7 +44,8 @@ public:
 
 private:
   std::vector<LoopClosureProposal> findClosures(const KeyFrame & query);
-  bool isCandidate(const KeyFrame & query, const KeyFrame & candidate) const;
+  bool isCandidate(
+    const KeyFrame & query, const KeyFrame & candidate, double & mahalanobis_squared) const;
 
   void run();
 

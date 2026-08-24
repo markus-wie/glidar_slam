@@ -189,6 +189,11 @@ void SubmapGrid::add(const std::vector<Point2D> & points, uint64_t keyframe_id)
     }
   }
 
+  {
+    std::lock_guard<std::mutex> lock(field_cache_mutex_);
+    field_cache_.clear();
+  }
+
   active_keyframes_.push_back(keyframe_id);
   cached_world_points_.emplace(keyframe_id, points);
 }
@@ -229,6 +234,11 @@ void SubmapGrid::remove(uint64_t keyframe_id)
     }
   }
 
+  {
+    std::lock_guard<std::mutex> lock(field_cache_mutex_);
+    field_cache_.clear();
+  }
+
   cached_world_points_.erase(cache_it);
 
   auto kf_it = std::find(active_keyframes_.begin(), active_keyframes_.end(), keyframe_id);
@@ -249,12 +259,17 @@ size_t SubmapGrid::size() const
   return active_keyframes_.size();
 }
 
-LikelihoodField SubmapGrid::getLikelihoodField(
+std::shared_ptr<LikelihoodField> SubmapGrid::getLikelihoodField(
   double resolution, double smear_deviation, bool use_distance_transform, bool use_laplace_kernel,
   bool debug_timings) const
 {
   if (grids_.find(resolution) == grids_.end()) {
     throw std::invalid_argument("Requested resolution is not configured in SubmapGrid");
+  }
+
+  if (field_cache_.find(resolution) != field_cache_.end()) {
+    std::lock_guard<std::mutex> lock(field_cache_mutex_);
+    return field_cache_.at(resolution);
   }
 
   std::chrono::steady_clock::time_point start_time;
@@ -270,7 +285,9 @@ LikelihoodField SubmapGrid::getLikelihoodField(
   field.resolution = resolution;
 
   if (grid.active_cells.empty()) {
-    return field;
+    std::lock_guard<std::mutex> lock(field_cache_mutex_);
+    field_cache_.clear();
+    return std::make_shared<LikelihoodField>(field);
   }
 
   const double max_smear_distance = smear_deviation * 2.0;
@@ -303,7 +320,11 @@ LikelihoodField SubmapGrid::getLikelihoodField(
 
   if (use_distance_transform) {
     buildDistanceTransformField(field, grid, smear_deviation, use_laplace_kernel);
-    return field;
+
+    std::lock_guard<std::mutex> lock(field_cache_mutex_);
+    field_cache_.insert({resolution, std::make_shared<LikelihoodField>(field)});
+
+    return field_cache_.at(resolution);
   }
 
   // Precompute the splat kernel
@@ -376,7 +397,10 @@ LikelihoodField SubmapGrid::getLikelihoodField(
       preparation_ms, kernel_ms, splatting_ms, total_ms);
   }
 
-  return field;
+  std::lock_guard<std::mutex> lock(field_cache_mutex_);
+  field_cache_.insert({resolution, std::make_shared<LikelihoodField>(field)});
+
+  return field_cache_.at(resolution);
 }
 
 }  // namespace glidar_slam::core

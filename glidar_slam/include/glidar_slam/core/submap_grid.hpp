@@ -1,6 +1,7 @@
 #pragma once
 
 #include <deque>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -21,7 +22,7 @@ public:
 
   size_t size() const;
 
-  LikelihoodField getLikelihoodField(
+  std::shared_ptr<LikelihoodField> getLikelihoodField(
     double resolution, double smear_deviation, bool use_distance_transform, bool use_laplace_kernel,
     bool debug_timings = false) const;
 
@@ -65,7 +66,7 @@ public:
     std::vector<GridIndex> active_cells;  // Dynamic sparse set
 
     // O(1) bounds-relative indexing.
-    inline int flatIdx(int x, int y) const
+    int flatIdx(int x, int y) const
     {
       return (y - origin_y) * width + (x - origin_x);
     }
@@ -73,6 +74,9 @@ public:
 
 private:
   std::unordered_map<double, HitCountGrid> grids_;
+
+  mutable std::unordered_map<double, std::shared_ptr<LikelihoodField>> field_cache_;
+  mutable std::mutex field_cache_mutex_;
 
   std::deque<uint64_t> active_keyframes_;
   std::unordered_map<uint64_t, std::vector<Point2D>> cached_world_points_;

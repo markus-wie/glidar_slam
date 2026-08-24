@@ -1,13 +1,19 @@
 #include "glidar_slam/core/loop_closure.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
+#include "Eigen/Eigenvalues"
+#include "glidar_slam/core/scan_matcher/correlative_scan_matcher.hpp"
 #include "glidar_slam/core/utils.hpp"
 #include "glidar_slam/logger/logger.hpp"
+#include "opencv2/imgcodecs.hpp"
+#include "opencv2/imgproc.hpp"
 
 namespace glidar_slam::core {
 
@@ -31,9 +37,7 @@ LoopClosureDetector::~LoopClosureDetector()
 
 std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFrame & query)
 {
-  std::vector<LoopClosureProposal> proposals;
-
-  double search_radius = parameters_->loop_maximum_distance;  // Fallback
+  double search_radius = 1.0;  // Fallback
 
   if (query.covariance) {
     // Extract X and Y variance/covariance (GTSAM Pose3 translation indices are 3, 4)
@@ -46,7 +50,6 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
     const double det = var_x * var_y - cov_xy * cov_xy;
     const double max_eigenvalue = (trace + std::sqrt(trace * trace - 4.0 * det)) / 2.0;
 
-    // Radius = Mahalanobis threshold * std::sqrt(max_eigenvalue).
     search_radius = parameters_->loop_mahalanobis_threshold * std::sqrt(max_eigenvalue);
   }
 
@@ -54,31 +57,102 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
     SAM_INFO("Loop search radius: query={}, search_radius={}", query.key, search_radius);
   }
 
-  // TODO: Consider using marginal covariance of the latest pose to determine the search radius for
-  // nearby keyframes instead of a fixed distance threshold.
   std::vector<std::shared_ptr<const KeyFrame>> nearby_keyframes =
     map_database_->getNearbyKeyFrames(query.pose, search_radius);
 
-  std::vector<std::shared_ptr<const KeyFrame>> candidates;
+  std::shared_ptr<const KeyFrame> best_candidate;
+  double best_mahalanobis_squared = std::numeric_limits<double>::infinity();
   for (const std::shared_ptr<const KeyFrame> & candidate : nearby_keyframes) {
-    if (!isCandidate(query, *candidate)) {
+    double mahalanobis_squared = std::numeric_limits<double>::infinity();
+    if (!isCandidate(query, *candidate, mahalanobis_squared)) {
       continue;
     }
-    candidates.push_back(candidate);
+    if (mahalanobis_squared < best_mahalanobis_squared) {
+      best_mahalanobis_squared = mahalanobis_squared;
+      best_candidate = candidate;
+    }
   }
 
   std::vector<double> resolutions;
   resolutions = scan_matcher_->fieldResolutions();
 
-  for (const std::shared_ptr<const KeyFrame> & candidate : candidates) {
-    const std::vector<Point2D> & reference_points = candidate->scan->points2D();
-    const std::vector<Point2D> & current_points = query.scan->points2D();
+  LoopClosureProposal proposal;
 
-    const Pose2D pose_estimate = Utils::toPose2D(candidate->pose.inverse().compose(query.pose));
+  if (best_candidate) {
+    const std::shared_ptr<const KeyFrame> & candidate = best_candidate;
+    const std::vector<Point2D> & candidate_points = candidate->scan->points2D();
+
+    const std::vector<std::shared_ptr<const KeyFrame>> all_keyframes =
+      map_database_->getAllKeyFrames();
+
+    std::size_t candidate_index = all_keyframes.size();
+    for (std::size_t index = 0; index < all_keyframes.size(); ++index) {
+      if (all_keyframes[index]->key == candidate->key) {
+        candidate_index = index;
+        break;
+      }
+    }
 
     SubmapGrid submap_grid(resolutions);
-    submap_grid.add(reference_points, candidate->key);
-    const CsmResult result = scan_matcher_->match(submap_grid, current_points, pose_estimate);
+
+    const std::size_t window = 8;
+    const std::size_t first = candidate_index > window ? candidate_index - window : 0;
+    const std::size_t last = std::min(all_keyframes.size(), candidate_index + window + 1);
+
+    SAM_INFO(
+      "Loop closure submap window: candidate={}, index={}, window_size={}, first_index={}, "
+      "last_index={}",
+      candidate->key, candidate_index, window, first, last);
+
+    for (std::size_t index = first; index < last; ++index) {
+      const std::shared_ptr<const KeyFrame> & neighbor = all_keyframes[index];
+      std::vector<Point2D> points;
+      if (neighbor->key == candidate->key) {
+        points = candidate_points;
+      } else {
+        const gtsam::Pose3 neighbor_in_candidate =
+          candidate->pose.inverse().compose(neighbor->pose);
+        points = Utils::transformScanPoints(neighbor->scan->points2D(), neighbor_in_candidate);
+      }
+      submap_grid.add(points, neighbor->key);
+    }
+
+    const Pose2D pose_estimate = Utils::toPose2D(candidate->pose.between(
+      query.pose));  // Utils::toPose2D(query.pose.inverse().compose(candidate->pose));
+
+    const CsmResult result =
+      scan_matcher_->match(submap_grid, query.scan->points2D(), pose_estimate);
+
+    // Can be used to debug the likelihood field that is built here.
+    // const std::string debug_image_path = "/workspaces/ros2/debug_out";
+    // static std::atomic_uint64_t debug_image_number{0};
+    // const uint64_t image_number = debug_image_number.fetch_add(1, std::memory_order_relaxed);
+    // const auto save_debug_image = [&](const CsmResult::DebugImage & image, const char * name) {
+    //   if (image.width <= 0 || image.height <= 0 || image.pixels.empty()) {
+    //     return;
+    //   }
+
+    //   cv::Mat image_mat(image.height, image.width, CV_8UC1);
+    //   std::copy(image.pixels.begin(), image.pixels.end(), image_mat.data);
+
+    //   cv::Mat bgr;
+    //   cv::applyColorMap(image_mat, bgr, cv::COLORMAP_TURBO);
+
+    //   cv::Mat rgb;
+    //   cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
+
+    //   const std::string filename =
+    //     debug_image_path + "/loop_closure_" + name + "_" + std::to_string(image_number) + ".png";
+    //   if (!cv::imwrite(filename, rgb)) {
+    //     SAM_WARN("Failed to write loop-closure debug image: {}", filename);
+    //   }
+    // };
+
+    // save_debug_image(result.low_res_debug, "low");
+    // save_debug_image(result.high_res_debug, "high");
+    // SAM_INFO(
+    //   "Loop-closure debug image number: {}. Amount of keyframes added to submap: {}",
+    //   image_number, submap_grid.size());
 
     if (result.score < parameters_->loop_minimum_score) {
       if (parameters_->loop_debug_enable) {
@@ -86,67 +160,56 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
           "Loop candidate rejected: query={}, candidate={}, score={}, minimum_score={}", query.key,
           candidate->key, result.score, parameters_->loop_minimum_score);
       }
-      continue;
-    }
+    } else {
+      Pose2D constrained_pose = result.optimized_pose;
 
-    const double consistency_error = 0.0;
+      proposal.from_key = candidate->key;
+      proposal.to_key = query.key;
 
-    LoopClosureProposal proposal;
-    proposal.from_key = candidate->key;
-    proposal.to_key = query.key;
-    proposal.relative_pose = Utils::toPose3(result.optimized_pose);
-    proposal.covariance = gtsam::Matrix66::Zero();
-    proposal.covariance(0, 0) = 1e6;
-    proposal.covariance(1, 1) = 1e6;
-    proposal.covariance(2, 2) = result.covariance(2, 2);
-    proposal.covariance(3, 3) = result.covariance(0, 0);
-    proposal.covariance(4, 4) = result.covariance(1, 1);
-    proposal.covariance(5, 5) = 1e6;
-    proposal.covariance(3, 4) = result.covariance(0, 1);
-    proposal.covariance(4, 3) = result.covariance(1, 0);
-    proposal.covariance(2, 3) = result.covariance(2, 0);
-    proposal.covariance(3, 2) = result.covariance(0, 2);
-    proposal.covariance(2, 4) = result.covariance(2, 1);
-    proposal.covariance(4, 2) = result.covariance(1, 2);
-    proposal.score = result.score;
-    proposal.consistency_error = consistency_error;
-    proposals.push_back(std::move(proposal));
+      proposal.relative_pose = Utils::toPose3(constrained_pose);
+      proposal.covariance = gtsam::Matrix66::Zero();
 
-    if (parameters_->loop_debug_enable) {
-      SAM_INFO(
-        "Loop candidate matched: query={}, candidate={}, score={}, pose_estimate=({}, {}, {}), "
-        "relative_pose=({}, {}, {})",
-        query.key, candidate->key, result.score, pose_estimate.x, pose_estimate.y,
-        pose_estimate.yaw, result.optimized_pose.x, result.optimized_pose.y,
-        result.optimized_pose.yaw);
+      proposal.covariance(0, 0) = parameters_->unobservable_variance;
+      proposal.covariance(1, 1) = parameters_->unobservable_variance;
+      proposal.covariance(2, 2) = result.covariance(2, 2);
+      proposal.covariance(3, 3) = result.covariance(0, 0);
+      proposal.covariance(4, 4) = result.covariance(1, 1);
+      proposal.covariance(5, 5) = parameters_->unobservable_variance;
+      proposal.covariance(3, 4) = result.covariance(0, 1);
+      proposal.covariance(4, 3) = result.covariance(1, 0);
+      proposal.covariance(3, 2) = result.covariance(0, 2);
+      proposal.covariance(2, 3) = result.covariance(2, 0);
+      proposal.covariance(4, 2) = result.covariance(1, 2);
+      proposal.covariance(2, 4) = result.covariance(2, 1);
+
+      proposal.score = result.score;
+
+      if (parameters_->loop_debug_enable) {
+        SAM_INFO(
+          "Loop candidate matched: query={}, candidate={}, score={}, pose_estimate=({}, {}, {}), "
+          "relative_pose=({}, {}, {}), csm_covariance=({}, {}, {})",
+          query.key, candidate->key, result.score, pose_estimate.x, pose_estimate.y,
+          pose_estimate.yaw, constrained_pose.x, constrained_pose.y, constrained_pose.yaw,
+          result.covariance(0, 0), result.covariance(1, 1), result.covariance(2, 2));
+      }
     }
   }
 
   if (parameters_->loop_debug_enable) {
     SAM_INFO(
-      "Loop query processed: query={}, nearby_keyframes={}, candidates={}, proposals={}", query.key,
-      nearby_keyframes.size(), candidates.size(), proposals.size());
+      "Loop query processed: query={}, nearby_keyframes={}", query.key, nearby_keyframes.size());
   }
 
-  if (proposals.empty()) {
-    return proposals;
+  std::vector<LoopClosureProposal> proposals;
+  if (best_candidate) {
+    proposals.push_back(proposal);
   }
-
-  LoopClosureProposal best_proposal;
-  double best_score = -std::numeric_limits<double>::infinity();
-  for (const LoopClosureProposal & proposal : proposals) {
-    if (proposal.score > best_score) {
-      best_score = proposal.score;
-      best_proposal = proposal;
-    }
-  }
-  proposals.clear();
-  proposals.push_back(best_proposal);
 
   return proposals;
 }
 
-bool LoopClosureDetector::isCandidate(const KeyFrame & query, const KeyFrame & candidate) const
+bool LoopClosureDetector::isCandidate(
+  const KeyFrame & query, const KeyFrame & candidate, double & mahalanobis_squared) const
 {
   if (
     query.key <= candidate.key ||
@@ -200,7 +263,7 @@ bool LoopClosureDetector::isCandidate(const KeyFrame & query, const KeyFrame & c
   error_se2 << log_error(2), log_error(3), log_error(4);
 
   // Compute exact Mahalanobis distance
-  const double mahalanobis_squared = error_se2.transpose() * cov_se2.inverse() * error_se2;
+  mahalanobis_squared = error_se2.transpose() * cov_se2.inverse() * error_se2;
   const double mahalanobis_limit =
     parameters_->loop_mahalanobis_threshold * parameters_->loop_mahalanobis_threshold;
 
@@ -301,9 +364,7 @@ void LoopClosureDetector::run()
       const double elapsed_ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - search_start)
           .count();
-      SAM_INFO(
-        "Loop closure timing [ms]: query_key={}, search={}, proposals={}", query.key, elapsed_ms,
-        proposals.size());
+      SAM_INFO("Loop closure timing [ms]: total={}", elapsed_ms);
     }
 
     {
