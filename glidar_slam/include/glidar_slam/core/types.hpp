@@ -28,5 +28,6 @@ struct Pose2D
 using PointCloudXYZ = pcl::PointCloud<pcl::PointXYZ>;
 using PointCloudXYZPtr = PointCloudXYZ::Ptr;
 using PointCloudXYZConstPtr = PointCloudXYZ::ConstPtr;
+using PointCloudXYZRGBA = pcl::PointCloud<pcl::PointXYZRGBA>;
 
 }  // namespace glidar_slam::core

@@ -72,6 +72,14 @@ struct Parameters
   double ground_map_resolution{0.02};
   int ground_map_padding{2};
   int ground_marking_white_threshold{200};
+  bool ground_matching_enable{false};
+  int ground_matching_minimum_marking_count{20};
+  double ground_matching_minimum_score{0.5};
+  double ground_matching_min_forward_distance{0.0};
+  double ground_matching_max_forward_distance{2.0};
+  double ground_matching_csm_smear_deviation{0.03};
+  bool ground_matching_debug_enable{false};
+  std::string ground_matching_debug_topic{"glidar_slam/debug/ground_matching"};
 
   // Correlative Scan Matcher Parameters
   double csm_smear_deviation{0.1};
@@ -165,6 +173,13 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  ground_map_resolution: " << p.ground_map_resolution << ",\n"
      << "  ground_map_padding: " << p.ground_map_padding << ",\n"
      << "  ground_marking_white_threshold: " << p.ground_marking_white_threshold << ",\n"
+     << "  ground_matching_enable: " << (p.ground_matching_enable ? "true" : "false") << ",\n"
+     << "  ground_matching_minimum_marking_count: " << p.ground_matching_minimum_marking_count
+     << ",\n"
+     << "  ground_matching_minimum_score: " << p.ground_matching_minimum_score << ",\n"
+     << "  ground_matching_debug_enable: " << (p.ground_matching_debug_enable ? "true" : "false")
+     << ",\n"
+     << "  ground_matching_debug_topic: " << p.ground_matching_debug_topic << ",\n"
      << "  csm_debug_enable: " << (p.csm_debug_enable ? "true" : "false") << ",\n"
      << "  csm_smear_deviation: " << p.csm_smear_deviation << ",\n"
      << "  csm_use_distance_transform: " << (p.csm_use_distance_transform ? "true" : "false")

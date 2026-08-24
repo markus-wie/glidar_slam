@@ -133,6 +133,36 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   parameters_->ground_map_padding = this->declare_parameter<int>("ground_map_padding", 2);
   parameters_->ground_marking_white_threshold =
     this->declare_parameter<int>("ground_marking_white_threshold", 200);
+  parameters_->ground_matching_enable =
+    this->declare_parameter<bool>("ground_matching_enable", false);
+  parameters_->ground_matching_minimum_marking_count =
+    this->declare_parameter<int>("ground_matching_minimum_marking_count", 20);
+  parameters_->ground_matching_minimum_score =
+    this->declare_parameter<double>("ground_matching_minimum_score", 0.5);
+  parameters_->ground_matching_min_forward_distance =
+    this->declare_parameter<double>("ground_matching_min_forward_distance", 0.0);
+  parameters_->ground_matching_max_forward_distance =
+    this->declare_parameter<double>("ground_matching_max_forward_distance", 2.0);
+  parameters_->ground_matching_csm_smear_deviation =
+    this->declare_parameter<double>("ground_matching_csm_smear_deviation", 0.03);
+  parameters_->ground_matching_debug_enable =
+    this->declare_parameter<bool>("ground_matching_debug_enable", false);
+  parameters_->ground_matching_debug_topic = this->declare_parameter<std::string>(
+    "ground_matching_debug_topic", "glidar_slam/debug/ground_matching");
+  if (
+    parameters_->ground_matching_minimum_marking_count < 0 ||
+    !std::isfinite(parameters_->ground_matching_minimum_score) ||
+    parameters_->ground_matching_minimum_score < 0.0 ||
+    !std::isfinite(parameters_->ground_matching_min_forward_distance) ||
+    !std::isfinite(parameters_->ground_matching_max_forward_distance) ||
+    parameters_->ground_matching_min_forward_distance >=
+      parameters_->ground_matching_max_forward_distance ||
+    !std::isfinite(parameters_->ground_matching_csm_smear_deviation) ||
+    parameters_->ground_matching_csm_smear_deviation <= 0.0) {
+    throw std::runtime_error(
+      "Ground matching minimum count must be non-negative and minimum score must be finite and "
+      "non-negative");
+  }
 
   parameters_->loop_debug_enable = this->declare_parameter<bool>("loop_debug_enable", false);
   parameters_->loop_input_queue_capacity =
@@ -205,6 +235,8 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     parameters_->ground_texture_coverage_topic, 10);
   ground_debug_cloud_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
     parameters_->ground_debug_cloud_topic, 10);
+  ground_matching_debug_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+    parameters_->ground_matching_debug_topic, 10);
   ground_debug_marker_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
     parameters_->ground_debug_marker_topic, 10);
   ground_debug_image_publisher_ =
@@ -363,6 +395,22 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.ground_map_padding = static_cast<int>(parameter.as_int());
     } else if (name == "ground_marking_white_threshold") {
       updated.ground_marking_white_threshold = static_cast<int>(parameter.as_int());
+    } else if (name == "ground_matching_enable") {
+      updated.ground_matching_enable = parameter.as_bool();
+    } else if (name == "ground_matching_minimum_marking_count") {
+      updated.ground_matching_minimum_marking_count = static_cast<int>(parameter.as_int());
+    } else if (name == "ground_matching_minimum_score") {
+      updated.ground_matching_minimum_score = parameter.as_double();
+    } else if (name == "ground_matching_min_forward_distance") {
+      updated.ground_matching_min_forward_distance = parameter.as_double();
+    } else if (name == "ground_matching_max_forward_distance") {
+      updated.ground_matching_max_forward_distance = parameter.as_double();
+    } else if (name == "ground_matching_csm_smear_deviation") {
+      updated.ground_matching_csm_smear_deviation = parameter.as_double();
+    } else if (name == "ground_matching_debug_enable") {
+      updated.ground_matching_debug_enable = parameter.as_bool();
+    } else if (name == "ground_matching_debug_topic") {
+      updated.ground_matching_debug_topic = parameter.as_string();
     } else if (name == "loop_debug_enable") {
       updated.loop_debug_enable = parameter.as_bool();
     } else if (name == "loop_minimum_key_separation") {
@@ -396,6 +444,20 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
     } else if (name == "csm_angle_penalty_std_dev") {
       updated.csm_angle_penalty_std_dev = parameter.as_double();
     }
+  }
+
+  if (
+    updated.ground_matching_minimum_marking_count < 0 ||
+    !std::isfinite(updated.ground_matching_minimum_score) ||
+    updated.ground_matching_minimum_score < 0.0 ||
+    !std::isfinite(updated.ground_matching_min_forward_distance) ||
+    !std::isfinite(updated.ground_matching_max_forward_distance) ||
+    updated.ground_matching_min_forward_distance >= updated.ground_matching_max_forward_distance ||
+    !std::isfinite(updated.ground_matching_csm_smear_deviation) ||
+    updated.ground_matching_csm_smear_deviation <= 0.0) {
+    result.successful = false;
+    result.reason = "ground matching minimum count and score must be finite and non-negative";
+    return result;
   }
 
   *parameters_ = std::move(updated);
@@ -531,6 +593,7 @@ void Ros2SlamWrapper::ScanRGBDCallback(
   publishOccupancyGrid(scans_transformed, rclcpp::Time(scan_msg->header.stamp));
   publishGroundMap(rclcpp::Time(scan_msg->header.stamp));
   publishDebugImage(rclcpp::Time(scan_msg->header.stamp));
+  publishGroundMatchingDebug(rclcpp::Time(scan_msg->header.stamp));
 
   if (parameters_->ground_debug_enable) {
     const auto observation = slam_system_->getLatestGroundObservation();
@@ -614,6 +677,24 @@ void Ros2SlamWrapper::publishGroundDebug(
     observation.point_count, observation.inlier_count, inlier_ratio, observation.normal_in_base.x(),
     observation.normal_in_base.y(), observation.normal_in_base.z(), observation.distance_to_base,
     tilt_degrees);
+}
+
+void Ros2SlamWrapper::publishGroundMatchingDebug(const rclcpp::Time & stamp)
+{
+  if (!parameters_->ground_matching_debug_enable) {
+    return;
+  }
+
+  const auto debug_cloud = slam_system_->getLatestGroundMatchingDebug();
+  if (!debug_cloud) {
+    return;
+  }
+
+  sensor_msgs::msg::PointCloud2 cloud_msg;
+  pcl::toROSMsg(*debug_cloud, cloud_msg);
+  cloud_msg.header.stamp = stamp;
+  cloud_msg.header.frame_id = parameters_->map_frame;
+  ground_matching_debug_publisher_->publish(cloud_msg);
 }
 
 void Ros2SlamWrapper::clearGroundDebug(const rclcpp::Time & stamp) const

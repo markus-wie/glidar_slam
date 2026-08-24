@@ -20,7 +20,7 @@ glidar_slam:
 
     # Odometry Covariance Override
     # [x, y, z, roll, pitch, yaw]
-    odom_covariance_diagonal: [1.5, 0.5, 1.0e-5, 1.0e-5, 1.0e-5, 0.5]
+    odom_covariance_diagonal: [0.2, 0.2, 1.0e-6, 1.0e-6, 1.0e-6, 0.1]
 
     # General Parameters
     minimum_travel_distance: 0.4
@@ -36,7 +36,7 @@ glidar_slam:
     submap_window_size: 5
 
     # Ground Observation Parameters
-    ground_debug_enable: false
+    ground_debug_enable: true
     ground_debug_cloud_topic: glidar_slam/debug/ground_inliers
     ground_debug_marker_topic: glidar_slam/debug/ground_plane
     ground_debug_image_topic: glidar_slam/debug/ground_overlay
@@ -44,8 +44,8 @@ glidar_slam:
     ground_optimization_enable: true
     ground_observation_max_age_sec: 0.1
     ground_minimum_inlier_count: 100
-    ground_normal_sigma: 0.05
-    ground_distance_sigma: 0.03
+    ground_normal_sigma: 0.02
+    ground_distance_sigma: 0.02
     # Weak roll/pitch/Z constraint used only when no valid plane observation is available.
     ground_fallback_variance: 1.0
     # [left, right, top, bottom] fractions omitted before RGB-D ground extraction.
@@ -67,13 +67,21 @@ glidar_slam:
     ground_map_padding: 2
     # Adaptive-threshold pixels at or above this value are treated as white markings.
     ground_marking_white_threshold: 200
+    ground_matching_enable: false
+    ground_matching_minimum_marking_count: 20
+    ground_matching_minimum_score: 0.5
+    ground_matching_min_forward_distance: 0.0
+    ground_matching_max_forward_distance: 2.0
+    ground_matching_csm_smear_deviation: 0.1
+    ground_matching_debug_enable: true
+    ground_matching_debug_topic: glidar_slam/debug/ground_matching
 
     #### Loop Closure Parameters
     loop_debug_enable: false
     loop_input_queue_capacity: 5
     loop_output_queue_capacity: 8
     # minimum number of keyframes between query and candidate keyframes to be considered for loop closure
-    loop_minimum_key_separation: 20
+    loop_minimum_key_separation: 40
     # max euclidean distance between query and candidate keyframes to be considered for loop closure
     loop_maximum_distance: 2.0
     # max heading difference between query and candidate keyframes to be considered for loop closure
@@ -90,7 +98,7 @@ glidar_slam:
     loop_maximum_consistency_error: 0.5
     
     #### Correlative Scan Matcher Parameters
-    csm_debug_enable: false
+    csm_debug_enable: true
     csm_smear_deviation: 0.1
     # Uses a linear-time Euclidean distance transform instead of point-wise Gaussian splatting.
     csm_use_distance_transform: false
@@ -100,7 +108,8 @@ glidar_slam:
     # This is a strategy to solve the long corridor problem by trusting the odometry induced guess more than the matcher
     # They represent the standard deviation of a Gaussian that is applied to the CSM score based on the distance and angle from the initial guess.
     # The actual penalty is computed as 1 - 0.2 * (delta^2 / std_dev^2), which acts as a flattened first order approximation of a Gaussian kernel
-    csm_use_penalty: true
+    # One must consider that this artifically inflates the covariance of the CSM result, so it should be used with care.
+    csm_use_penalty: false
     csm_distance_penalty_std_dev: 0.5
     csm_angle_penalty_std_dev: 0.5
 

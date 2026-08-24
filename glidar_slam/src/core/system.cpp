@@ -28,6 +28,7 @@ SlamSystem::SlamSystem(const std::shared_ptr<Parameters> & parameters) : paramet
   map_database_ = std::make_shared<MapDatabase>();
   graph_optimizer_ = std::make_unique<GraphOptimizer>(parameters_);
   scan_matcher_ = std::make_unique<CorrelativeScanMatcher>(parameters_);
+  ground_marking_matcher_ = std::make_unique<GroundMarkingMatcher>(parameters_);
   loop_closure_detector_ = std::make_unique<LoopClosureDetector>(parameters_, map_database_);
   loop_closure_detector_->start();
 }
@@ -136,6 +137,7 @@ bool SlamSystem::process(
     latest_low_res_debug_ = csm_result.low_res_debug;
     latest_high_res_debug_ = csm_result.high_res_debug;
     latest_ground_observation_ = ground_observation;
+    latest_ground_matching_debug_.reset();
   }
 
   // Map the 3x3 CSM Covariance (x, y, yaw) to a 6x6 GTSAM Covariance Matrix
@@ -201,6 +203,64 @@ bool SlamSystem::process(
   // Add LiDAR Scan Matching Factor
   graph_optimizer_->addRelativeFactor(
     reference_keyframe->key, next_keyframe_key, csm_pose_delta, csm_covariance);
+
+  if (
+    parameters_->ground_matching_enable && reference_keyframe->ground_observation &&
+    ground_observation) {
+    const Pose2D ground_pose_estimate =
+      Utils::toPose2D(reference_keyframe->pose.inverse().compose(current_guess));
+    const auto ground_match = ground_marking_matcher_->match(
+      *reference_keyframe->ground_observation, *ground_observation, ground_pose_estimate);
+    if (
+      ground_match && std::isfinite(ground_match->score) &&
+      ground_match->score >= parameters_->ground_matching_minimum_score &&
+      std::isfinite(ground_match->optimized_pose.x) &&
+      std::isfinite(ground_match->optimized_pose.y) &&
+      std::isfinite(ground_match->optimized_pose.yaw) && ground_match->covariance.allFinite()) {
+      gtsam::Matrix66 ground_covariance = gtsam::Matrix66::Zero();
+      ground_covariance(0, 0) = INF_VAR;
+      ground_covariance(1, 1) = INF_VAR;
+      ground_covariance(2, 2) = ground_match->covariance(2, 2);
+      ground_covariance(3, 3) = ground_match->covariance(0, 0);
+      ground_covariance(4, 4) = ground_match->covariance(1, 1);
+      ground_covariance(5, 5) = INF_VAR;
+      ground_covariance(3, 4) = ground_match->covariance(0, 1);
+      ground_covariance(4, 3) = ground_match->covariance(1, 0);
+      ground_covariance(3, 2) = ground_match->covariance(0, 2);
+      ground_covariance(2, 3) = ground_match->covariance(2, 0);
+      ground_covariance(4, 2) = ground_match->covariance(1, 2);
+      ground_covariance(2, 4) = ground_match->covariance(2, 1);
+
+      graph_optimizer_->addRelativeFactor(
+        reference_keyframe->key, next_keyframe_key, Utils::toPose3(ground_match->optimized_pose),
+        ground_covariance);
+
+      if (parameters_->ground_matching_debug_enable) {
+        const PointCloudXYZRGBA reference_debug_cloud = GroundMarkingMatcher::makeDebugCloud(
+          *reference_keyframe->ground_observation, *ground_observation, *ground_match,
+          parameters_->ground_marking_white_threshold);
+        const gtsam::Vector3 reference_rpy = reference_keyframe->pose.rotation().rpy();
+        const auto translation = reference_keyframe->pose.translation();
+        const Eigen::Affine3f map_from_reference =
+          Eigen::Translation3f(
+            static_cast<float>(translation.x()), static_cast<float>(translation.y()),
+            static_cast<float>(translation.z())) *
+          Eigen::AngleAxisf(static_cast<float>(reference_rpy.z()), Eigen::Vector3f::UnitZ()) *
+          Eigen::AngleAxisf(static_cast<float>(reference_rpy.y()), Eigen::Vector3f::UnitY()) *
+          Eigen::AngleAxisf(static_cast<float>(reference_rpy.x()), Eigen::Vector3f::UnitX());
+        PointCloudXYZRGBA map_debug_cloud;
+        pcl::transformPointCloud(reference_debug_cloud, map_debug_cloud, map_from_reference);
+        std::lock_guard<std::mutex> lock(latest_output_mutex_);
+        latest_ground_matching_debug_ = std::move(map_debug_cloud);
+      }
+
+      if (parameters_->ground_debug_enable) {
+        SAM_INFO(
+          "Ground marking factor added at keyframe {} with score {}", next_keyframe_key,
+          ground_match->score);
+      }
+    }
+  }
 
   if (use_ground_constraint) {
     graph_optimizer_->addGroundPlaneFactor(
@@ -298,6 +358,12 @@ std::optional<GroundPlaneObservation> SlamSystem::getLatestGroundObservation() c
 {
   std::lock_guard<std::mutex> lock(latest_output_mutex_);
   return latest_ground_observation_;
+}
+
+std::optional<PointCloudXYZRGBA> SlamSystem::getLatestGroundMatchingDebug() const
+{
+  std::lock_guard<std::mutex> lock(latest_output_mutex_);
+  return latest_ground_matching_debug_;
 }
 
 void SlamSystem::appendVisiblePoints(

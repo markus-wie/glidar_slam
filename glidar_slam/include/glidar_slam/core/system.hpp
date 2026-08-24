@@ -10,6 +10,7 @@
 
 #include "glidar_slam/core/correlative_scan_matcher.hpp"
 #include "glidar_slam/core/graph_optimizer.hpp"
+#include "glidar_slam/core/ground_marking_matcher.hpp"
 #include "glidar_slam/core/ground_plane_extractor.hpp"
 #include "glidar_slam/core/key_frame.hpp"
 #include "glidar_slam/core/loop_closure.hpp"
@@ -34,6 +35,7 @@ public:
   std::optional<CsmResult::DebugImage> getLatestLowResDebug() const;
   std::optional<CsmResult::DebugImage> getLatestHighResDebug() const;
   std::optional<GroundPlaneObservation> getLatestGroundObservation() const;
+  std::optional<PointCloudXYZRGBA> getLatestGroundMatchingDebug() const;
 
   PointCloudXYZ getMapCloud() const;
   std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> getTransformedKeyFrameScans() const;
@@ -67,6 +69,7 @@ private:
 
   // subsystems
   std::unique_ptr<CorrelativeScanMatcher> scan_matcher_;
+  std::unique_ptr<GroundMarkingMatcher> ground_marking_matcher_;
   std::unique_ptr<GraphOptimizer> graph_optimizer_;
   std::unique_ptr<LoopClosureDetector> loop_closure_detector_;
 
@@ -76,6 +79,7 @@ private:
   std::optional<CsmResult::DebugImage> latest_low_res_debug_;
   std::optional<CsmResult::DebugImage> latest_high_res_debug_;
   std::optional<GroundPlaneObservation> latest_ground_observation_;
+  std::optional<PointCloudXYZRGBA> latest_ground_matching_debug_;
   mutable std::mutex latest_output_mutex_;
   std::vector<std::pair<uint64_t, uint64_t>> loop_closures_;
   mutable std::mutex loop_closures_mutex_;

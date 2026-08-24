@@ -70,6 +70,7 @@ private:
   void publishGroundDebug(
     const glidar_slam::core::GroundPlaneObservation & observation,
     const rclcpp::Time & stamp) const;
+  void publishGroundMatchingDebug(const rclcpp::Time & stamp);
   void clearGroundDebug(const rclcpp::Time & stamp) const;
   void publishGroundDebugImage(
     const glidar_slam::core::GroundPlaneObservation & observation, const cv::Mat & color,
@@ -150,6 +151,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr ground_texture_image_publisher_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr ground_texture_coverage_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_debug_cloud_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_matching_debug_publisher_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr ground_debug_marker_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr ground_debug_image_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr csm_debug_low_publisher_;
