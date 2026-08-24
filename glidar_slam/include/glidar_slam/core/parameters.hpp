@@ -83,7 +83,6 @@ struct Parameters
   double ground_matching_minimum_score{0.5};
   double ground_matching_min_forward_distance{0.0};
   double ground_matching_max_forward_distance{2.0};
-  double ground_matching_csm_smear_deviation{0.03};
   bool ground_matching_debug_enable{false};
   std::string ground_matching_debug_topic{"glidar_slam/debug/ground_matching"};
 
@@ -188,13 +187,6 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  ground_matching_debug_enable: " << (p.ground_matching_debug_enable ? "true" : "false")
      << ",\n"
      << "  ground_matching_debug_topic: " << p.ground_matching_debug_topic << ",\n"
-     << "  csm_debug_enable: " << (p.csm_debug_enable ? "true" : "false") << ",\n"
-     << "  csm_smear_deviation: " << p.csm_smear_deviation << ",\n"
-     << "  csm_use_laplace_kernel: " << (p.csm_use_laplace_kernel ? "true" : "false") << ",\n"
-     << "  csm_use_distance_transform: " << (p.csm_use_distance_transform ? "true" : "false")
-     << ",\n"
-     << "  csm_use_tbb: " << (p.csm_use_tbb ? "true" : "false") << ",\n"
-     << "  csm_search_stages (size): " << p.csm_search_stages.size() << ",\n"
      << "  loop_debug_enable: " << (p.loop_debug_enable ? "true" : "false") << ",\n"
      << "  loop_input_queue_capacity: " << p.loop_input_queue_capacity << ",\n"
      << "  loop_output_queue_capacity: " << p.loop_output_queue_capacity << ",\n"

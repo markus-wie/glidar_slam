@@ -1,5 +1,6 @@
 #include "glidar_slam/core/loop_closure.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
@@ -11,8 +12,9 @@
 namespace glidar_slam::core {
 
 LoopClosureDetector::LoopClosureDetector(
-  const std::shared_ptr<Parameters> & parameters, const std::shared_ptr<MapDatabase> & map_database)
-: parameters_(parameters), map_database_(map_database)
+  const std::shared_ptr<Parameters> & parameters, const std::shared_ptr<MapDatabase> & map_database,
+  std::unique_ptr<ScanMatcher> scan_matcher)
+: parameters_(parameters), map_database_(map_database), scan_matcher_(std::move(scan_matcher))
 {
   if (!map_database_) {
     throw std::invalid_argument("Map database must not be null");
@@ -20,7 +22,6 @@ LoopClosureDetector::LoopClosureDetector(
   if (!parameters_) {
     throw std::invalid_argument("Parameters must not be null");
   }
-  scan_matcher_ = std::make_unique<CorrelativeScanMatcher>(parameters_);
 }
 
 LoopClosureDetector::~LoopClosureDetector()
@@ -67,10 +68,7 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
   }
 
   std::vector<double> resolutions;
-  resolutions.reserve(parameters_->csm_search_stages.size());
-  for (const auto & stage : parameters_->csm_search_stages) {
-    resolutions.push_back(stage.field_resolution);
-  }
+  resolutions = scan_matcher_->fieldResolutions();
 
   for (const std::shared_ptr<const KeyFrame> & candidate : candidates) {
     const std::vector<Point2D> & reference_points = candidate->scan->points2D();

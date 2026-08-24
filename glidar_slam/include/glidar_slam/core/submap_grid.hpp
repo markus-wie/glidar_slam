@@ -2,6 +2,7 @@
 
 #include <deque>
 #include <unordered_map>
+#include <vector>
 
 #include "glidar_slam/core/likelihood_field.hpp"
 #include "glidar_slam/core/types.hpp"

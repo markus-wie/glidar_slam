@@ -6,8 +6,8 @@
 #include <cmath>
 #include <unordered_map>
 
-#include "glidar_slam/core/correlative_scan_matcher.hpp"
 #include "glidar_slam/core/ground_plane_extractor.hpp"
+#include "glidar_slam/core/scan_matcher/correlative_scan_matcher.hpp"
 #include "glidar_slam/core/utils.hpp"
 #include "glidar_slam/logger/logger.hpp"
 #include "pcl/common/transforms.h"
@@ -162,21 +162,21 @@ std::vector<Point2D> linearInterpolateScan(const LaserScan & scan, double target
 
 }  // namespace
 
-SlamSystem::SlamSystem(const std::shared_ptr<Parameters> & parameters) : parameters_(parameters)
+SlamSystem::SlamSystem(
+  const std::shared_ptr<Parameters> & parameters, std::unique_ptr<ScanMatcher> scan_matcher,
+  std::unique_ptr<ScanMatcher> ground_scan_matcher, std::unique_ptr<ScanMatcher> loop_scan_matcher)
+: parameters_(parameters), scan_matcher_(std::move(scan_matcher))
 {
   map_database_ = std::make_shared<MapDatabase>();
   graph_optimizer_ = std::make_unique<GraphOptimizer>(parameters_);
-  scan_matcher_ = std::make_unique<CorrelativeScanMatcher>(parameters_);
-  ground_marking_matcher_ = std::make_unique<GroundMarkingMatcher>(parameters_);
+  ground_marking_matcher_ =
+    std::make_unique<GroundMarkingMatcher>(parameters_, std::move(ground_scan_matcher));
 
-  std::vector<double> resolutions;
-  resolutions.reserve(parameters_->csm_search_stages.size());
-  for (const auto & stage : parameters_->csm_search_stages) {
-    resolutions.push_back(stage.field_resolution);
-  }
+  std::vector<double> resolutions = scan_matcher_->fieldResolutions();
 
   submap_grid_ = std::make_unique<SubmapGrid>(resolutions);
-  loop_closure_detector_ = std::make_unique<LoopClosureDetector>(parameters_, map_database_);
+  loop_closure_detector_ =
+    std::make_unique<LoopClosureDetector>(parameters_, map_database_, std::move(loop_scan_matcher));
   loop_closure_detector_->start();
   map_builder_ = std::make_unique<MapBuilder>(parameters_);
   map_builder_->start();
@@ -364,7 +364,7 @@ bool SlamSystem::process(
   csm_covariance(4, 2) = relative_csm_covariance(1, 2);  // y-yaw
   csm_covariance(2, 4) = relative_csm_covariance(2, 1);  // yaw-y
 
-  if (parameters_->csm_debug_enable) {
+  if (parameters_->debug_timings) {
     SAM_INFO(
       "CSM Covariance (diagonal): x={}, y={}, yaw={}", csm_result.covariance(0, 0),
       csm_result.covariance(1, 1), csm_result.covariance(2, 2));
@@ -497,7 +497,7 @@ bool SlamSystem::process(
   gtsam::Matrix66 optimized_covariance =
     graph_optimizer_->getMarginalCovariance(next_keyframe_key).value_or(gtsam::Matrix66::Zero());
 
-  if (parameters_->csm_debug_enable) {
+  if (parameters_->debug_timings) {
     SAM_INFO(
       "GTSAM Covariance (diagonal): x={}, y={}, z={}", optimized_covariance(3, 3),
       optimized_covariance(4, 4), optimized_covariance(5, 5));
@@ -666,10 +666,7 @@ bool SlamSystem::processLoopClosureProposals()
 void SlamSystem::rebuildSubmap()
 {
   std::vector<double> resolutions;
-  resolutions.reserve(parameters_->csm_search_stages.size());
-  for (const auto & stage : parameters_->csm_search_stages) {
-    resolutions.push_back(stage.field_resolution);
-  }
+  resolutions = scan_matcher_->fieldResolutions();
 
   auto rebuilt_submap = std::make_unique<SubmapGrid>(resolutions);
   const auto keyframes = map_database_->getAllKeyFrames();

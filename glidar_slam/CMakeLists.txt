@@ -16,6 +16,7 @@ find_package(tf2_ros REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(message_filters REQUIRED)
+find_package(pluginlib REQUIRED)
 find_package(GTSAM REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common registration segmentation)
 find_package(pcl_conversions REQUIRED)
@@ -26,10 +27,10 @@ find_package(TBB REQUIRED)
 include_directories(include)
 
 add_library(${PROJECT_NAME}_core SHARED
-  src/core/correlative_scan_matcher.cpp
+  src/core/scan_matcher/correlative_scan_matcher.cpp
   src/core/submap_grid.cpp
   src/core/graph_optimizer.cpp
-  src/core/ground_marking_matcher.cpp
+  src/core/scan_matcher/ground_marking_matcher.cpp
   src/core/ground_plane_extractor.cpp
   src/core/ground_plane_factor.cpp
   src/core/global_map/ground_marking_grid.cpp
@@ -85,6 +86,17 @@ add_library(${PROJECT_NAME}_ros2 SHARED
   src/ros2/utils.cpp
 )
 
+add_library(${PROJECT_NAME}_scan_matcher_plugins SHARED
+  src/ros2/correlative_scan_matcher_plugin.cpp
+)
+
+target_compile_features(${PROJECT_NAME}_scan_matcher_plugins PUBLIC cxx_std_17)
+target_link_libraries(${PROJECT_NAME}_scan_matcher_plugins
+  pluginlib::pluginlib
+  rclcpp::rclcpp
+  ${PROJECT_NAME}_core
+)
+
 target_precompile_headers(${PROJECT_NAME}_ros2 PUBLIC
   <rclcpp/rclcpp.hpp>
   <tf2_ros/buffer.h>
@@ -107,6 +119,7 @@ target_include_directories(${PROJECT_NAME}_ros2 SYSTEM PUBLIC
 target_compile_features(${PROJECT_NAME}_ros2 PUBLIC cxx_std_17)
 
 target_link_libraries(${PROJECT_NAME}_ros2
+  pluginlib::pluginlib
   rclcpp::rclcpp
   ${nav_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
@@ -141,6 +154,7 @@ install(
 install(TARGETS
   ${PROJECT_NAME}_core
   ${PROJECT_NAME}_ros2
+  ${PROJECT_NAME}_scan_matcher_plugins
   ${PROJECT_NAME}_node
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -148,6 +162,15 @@ install(TARGETS
 install(
   DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
+)
+
+install(
+  FILES scan_matcher_plugins.xml
+  DESTINATION share/${PROJECT_NAME}
+)
+
+pluginlib_export_plugin_description_file(
+  glidar_slam scan_matcher_plugins.xml
 )
 
 ament_package()

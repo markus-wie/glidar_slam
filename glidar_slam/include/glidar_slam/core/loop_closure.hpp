@@ -10,10 +10,11 @@
 #include <thread>
 #include <vector>
 
-#include "glidar_slam/core/correlative_scan_matcher.hpp"
 #include "glidar_slam/core/key_frame.hpp"
 #include "glidar_slam/core/map_database.hpp"
 #include "glidar_slam/core/parameters.hpp"
+#include "glidar_slam/core/scan_matcher.hpp"
+#include "glidar_slam/core/scan_matcher/correlative_scan_matcher.hpp"
 #include "gtsam/geometry/Pose3.h"
 
 namespace glidar_slam::core {
@@ -34,7 +35,7 @@ class LoopClosureDetector
 public:
   LoopClosureDetector(
     const std::shared_ptr<Parameters> & parameters,
-    const std::shared_ptr<MapDatabase> & map_database);
+    const std::shared_ptr<MapDatabase> & map_database, std::unique_ptr<ScanMatcher> scan_matcher);
   ~LoopClosureDetector();
 
   void start();
@@ -50,7 +51,7 @@ private:
 
   std::shared_ptr<Parameters> parameters_;
   std::shared_ptr<MapDatabase> map_database_;
-  std::unique_ptr<CorrelativeScanMatcher> scan_matcher_;
+  std::unique_ptr<ScanMatcher> scan_matcher_;
 
   std::deque<KeyFrame> input_queue_;
   std::deque<LoopClosureProposal> output_queue_;

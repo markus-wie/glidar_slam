@@ -16,6 +16,7 @@
   <depend>visualization_msgs</depend>
   <depend>cv_bridge</depend>
   <depend>message_filters</depend>
+  <depend>pluginlib</depend>
   <depend>pcl_conversions</depend>
   <depend>libopencv-dev</depend>
   <depend>tf2_ros</depend>

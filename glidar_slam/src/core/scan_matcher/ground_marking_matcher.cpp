@@ -1,16 +1,16 @@
-#include "glidar_slam/core/ground_marking_matcher.hpp"
+#include "glidar_slam/core/scan_matcher/ground_marking_matcher.hpp"
 
 #include <algorithm>
 #include <cmath>
 
+#include "glidar_slam/core/scan_matcher/correlative_scan_matcher.hpp"
 #include "glidar_slam/logger/logger.hpp"
 
 namespace glidar_slam::core {
 
-GroundMarkingMatcher::GroundMarkingMatcher(const std::shared_ptr<Parameters> & parameters)
-: parameters_(parameters),
-  scan_matcher_parameters_(std::make_shared<Parameters>(*parameters)),
-  scan_matcher_(std::make_unique<CorrelativeScanMatcher>(scan_matcher_parameters_))
+GroundMarkingMatcher::GroundMarkingMatcher(
+  const std::shared_ptr<Parameters> & parameters, std::unique_ptr<ScanMatcher> scan_matcher)
+: parameters_(parameters), scan_matcher_(std::move(scan_matcher))
 {
 }
 
@@ -21,10 +21,10 @@ std::vector<Point2D> GroundMarkingMatcher::extractMarkingPoints(
   points.reserve(cloud.size());
   for (const auto & point : cloud) {
     if (
-      point.a < scan_matcher_parameters_->ground_marking_white_threshold ||
-      !std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z) ||
-      point.x < scan_matcher_parameters_->ground_matching_min_forward_distance ||
-      point.x > scan_matcher_parameters_->ground_matching_max_forward_distance) {
+      point.a < parameters_->ground_marking_white_threshold || !std::isfinite(point.x) ||
+      !std::isfinite(point.y) || !std::isfinite(point.z) ||
+      point.x < parameters_->ground_matching_min_forward_distance ||
+      point.x > parameters_->ground_matching_max_forward_distance) {
       continue;
     }
     points.push_back({point.x, point.y});
@@ -124,9 +124,6 @@ std::optional<CsmResult> GroundMarkingMatcher::match(
   const GroundPlaneObservation & reference_observation,
   const GroundPlaneObservation & current_observation, const Pose2D & relative_pose) const
 {
-  *scan_matcher_parameters_ = *parameters_;
-  scan_matcher_parameters_->csm_smear_deviation = parameters_->ground_matching_csm_smear_deviation;
-
   const std::vector<Point2D> reference_points =
     extractMarkingPoints(reference_observation.ground_cloud);
   const std::vector<Point2D> current_points =
@@ -136,10 +133,7 @@ std::optional<CsmResult> GroundMarkingMatcher::match(
     filterCurrentPoints(reference_points, current_points, relative_pose);
 
   std::vector<double> resolutions;
-  resolutions.reserve(scan_matcher_parameters_->csm_search_stages.size());
-  for (const auto & stage : scan_matcher_parameters_->csm_search_stages) {
-    resolutions.push_back(stage.field_resolution);
-  }
+  resolutions = scan_matcher_->fieldResolutions();
   SubmapGrid submap_grid(resolutions);
   submap_grid.add(reference_points, 0);
   return scan_matcher_->match(submap_grid, filtered_current_points, relative_pose);
@@ -150,7 +144,7 @@ std::vector<Point2D> GroundMarkingMatcher::filterCurrentPoints(
   const Pose2D & relative_pose) const
 {
   const auto minimum_marking_count = static_cast<std::vector<Point2D>::size_type>(
-    scan_matcher_parameters_->ground_matching_minimum_marking_count);
+    parameters_->ground_matching_minimum_marking_count);
   if (
     reference_points.size() < minimum_marking_count ||
     current_points.size() < minimum_marking_count) {
@@ -170,11 +164,7 @@ std::vector<Point2D> GroundMarkingMatcher::filterCurrentPoints(
     max_y = std::max(max_y, p.y);
   }
 
-  // Expand by tolerance (smear + max search window)
-  double max_search_window = 0.0;
-  for (const auto & stage : scan_matcher_parameters_->csm_search_stages) {
-    max_search_window = std::max({max_search_window, stage.window_x * 0.5, stage.window_y * 0.5});
-  }
+  // Expand by tolerance
   const double tolerance = 0.0;
 
   min_x -= tolerance;

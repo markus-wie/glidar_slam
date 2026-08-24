@@ -155,8 +155,6 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->declare_parameter<double>("ground_matching_min_forward_distance", 0.0);
   parameters_->ground_matching_max_forward_distance =
     this->declare_parameter<double>("ground_matching_max_forward_distance", 2.0);
-  parameters_->ground_matching_csm_smear_deviation =
-    this->declare_parameter<double>("ground_matching_csm_smear_deviation", 0.03);
   parameters_->ground_matching_debug_enable =
     this->declare_parameter<bool>("ground_matching_debug_enable", false);
   parameters_->ground_matching_debug_topic = this->declare_parameter<std::string>(
@@ -176,9 +174,7 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     !std::isfinite(parameters_->ground_matching_min_forward_distance) ||
     !std::isfinite(parameters_->ground_matching_max_forward_distance) ||
     parameters_->ground_matching_min_forward_distance >=
-      parameters_->ground_matching_max_forward_distance ||
-    !std::isfinite(parameters_->ground_matching_csm_smear_deviation) ||
-    parameters_->ground_matching_csm_smear_deviation <= 0.0) {
+      parameters_->ground_matching_max_forward_distance) {
     throw std::runtime_error(
       "Ground marking log-odds and matching parameters are outside their valid ranges");
   }
@@ -201,7 +197,8 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->declare_parameter<double>("loop_maximum_consistency_error", 0.5);
   parameters_->debug_timings = this->declare_parameter<bool>("debug_timings", false);
 
-  processCSMParameters();
+  scan_matcher_loader_ = std::make_unique<pluginlib::ClassLoader<ScanMatcherInterface>>(
+    "glidar_slam", "glidar_slam::ros2::ScanMatcherInterface");
 
   // Callback groups
   odom_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -275,75 +272,23 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     map_callback_group_);
 
   // SLAM System
-  slam_system_ = std::make_unique<SlamSystem>(parameters_);
+  slam_system_ = std::make_unique<SlamSystem>(
+    parameters_, loadScanMatcher("csm_local_tracker"),
+    loadScanMatcher("csm_ground_marking_detection"), loadScanMatcher("csm_loop_closure_detection"));
 }
 
-void Ros2SlamWrapper::processCSMParameters()
+std::unique_ptr<ScanMatcherInterface> Ros2SlamWrapper::loadScanMatcher(const std::string & name)
 {
-  parameters_->csm_debug_enable = this->declare_parameter<bool>("csm_debug_enable", false);
-
-  const auto stage_resolutions =
-    this->declare_parameter<std::vector<double>>("csm_stage_resolutions", std::vector<double>{});
-  const auto stage_translation_steps = this->declare_parameter<std::vector<double>>(
-    "csm_stage_translation_steps", std::vector<double>{});
-  const auto stage_angular_steps =
-    this->declare_parameter<std::vector<double>>("csm_stage_angular_steps", std::vector<double>{});
-  const auto stage_windows_x =
-    this->declare_parameter<std::vector<double>>("csm_stage_window_x", std::vector<double>{});
-  const auto stage_windows_y =
-    this->declare_parameter<std::vector<double>>("csm_stage_window_y", std::vector<double>{});
-  const auto stage_windows_yaw =
-    this->declare_parameter<std::vector<double>>("csm_stage_window_yaw", std::vector<double>{});
-
-  const bool has_stage_configuration = !stage_resolutions.empty() ||
-                                       !stage_translation_steps.empty() ||
-                                       !stage_angular_steps.empty() || !stage_windows_x.empty() ||
-                                       !stage_windows_y.empty() || !stage_windows_yaw.empty();
-  if (has_stage_configuration) {
-    const std::size_t stage_count = stage_resolutions.size();
-    if (
-      stage_count == 0 || stage_translation_steps.size() != stage_count ||
-      stage_angular_steps.size() != stage_count || stage_windows_x.size() != stage_count ||
-      stage_windows_y.size() != stage_count || stage_windows_yaw.size() != stage_count) {
-      throw std::runtime_error(
-        "All CSM stage parameter arrays must be non-empty and equal in length");
-    }
-
-    constexpr auto valid_positive = [](double value) {
-      return std::isfinite(value) && value > 0.0;
-    };
-    constexpr auto valid_window = [](double value) {
-      return std::isfinite(value) && value >= 0.0;
-    };
-    for (std::size_t index = 0; index < stage_count; ++index) {
-      if (
-        !valid_positive(stage_resolutions[index]) ||
-        !valid_positive(stage_translation_steps[index]) ||
-        !valid_positive(stage_angular_steps[index]) || !valid_window(stage_windows_x[index]) ||
-        !valid_window(stage_windows_y[index]) || !valid_window(stage_windows_yaw[index])) {
-        throw std::runtime_error(
-          "CSM stage values must be finite; steps and resolutions positive; windows non-negative");
-      }
-      glidar_slam::core::CsmSearchStage stage{};
-      stage.field_resolution = stage_resolutions[index];
-      stage.translation_step = stage_translation_steps[index];
-      stage.angular_step = stage_angular_steps[index];
-      stage.window_x = stage_windows_x[index];
-      stage.window_y = stage_windows_y[index];
-      stage.window_yaw = stage_windows_yaw[index];
-      parameters_->csm_search_stages.push_back(stage);
-    }
-  }
-
-  parameters_->csm_smear_deviation = this->declare_parameter<double>("csm_smear_deviation", 0.1);
-  parameters_->csm_use_laplace_kernel =
-    this->declare_parameter<bool>("csm_use_laplace_kernel", false);
-  parameters_->csm_use_distance_transform =
-    this->declare_parameter<bool>("csm_use_distance_transform", false);
-  parameters_->csm_use_tbb = this->declare_parameter<bool>("csm_use_tbb", false);
-
-  if (!std::isfinite(parameters_->csm_smear_deviation) || parameters_->csm_smear_deviation <= 0.0) {
-    throw std::runtime_error("CSM penalty parameters are outside their valid ranges");
+  const std::string plugin = this->declare_parameter<std::string>(
+    name + ".plugin", "glidar_slam/CorrelativeScanMatcherPlugin");
+  try {
+    auto matcher =
+      std::unique_ptr<ScanMatcherInterface>(scan_matcher_loader_->createUnmanagedInstance(plugin));
+    matcher->initialize(this, name);
+    return matcher;
+  } catch (const std::exception & exception) {
+    throw std::runtime_error(
+      "Failed to load scan matcher '" + plugin + "' for " + name + ": " + exception.what());
   }
 }
 
@@ -433,8 +378,6 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.ground_matching_min_forward_distance = parameter.as_double();
     } else if (name == "ground_matching_max_forward_distance") {
       updated.ground_matching_max_forward_distance = parameter.as_double();
-    } else if (name == "ground_matching_csm_smear_deviation") {
-      updated.ground_matching_csm_smear_deviation = parameter.as_double();
     } else if (name == "ground_matching_debug_enable") {
       updated.ground_matching_debug_enable = parameter.as_bool();
     } else if (name == "ground_matching_debug_topic") {
@@ -455,16 +398,6 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.loop_maximum_consistency_error = parameter.as_double();
     } else if (name == "debug_timings") {
       updated.debug_timings = parameter.as_bool();
-    } else if (name == "csm_debug_enable") {
-      updated.csm_debug_enable = parameter.as_bool();
-    } else if (name == "csm_smear_deviation") {
-      updated.csm_smear_deviation = parameter.as_double();
-    } else if (name == "csm_use_laplace_kernel") {
-      updated.csm_use_laplace_kernel = parameter.as_bool();
-    } else if (name == "csm_use_distance_transform") {
-      updated.csm_use_distance_transform = parameter.as_bool();
-    } else if (name == "csm_use_tbb") {
-      updated.csm_use_tbb = parameter.as_bool();
     }
   }
 
@@ -482,9 +415,7 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
     updated.ground_matching_minimum_score < 0.0 ||
     !std::isfinite(updated.ground_matching_min_forward_distance) ||
     !std::isfinite(updated.ground_matching_max_forward_distance) ||
-    updated.ground_matching_min_forward_distance >= updated.ground_matching_max_forward_distance ||
-    !std::isfinite(updated.ground_matching_csm_smear_deviation) ||
-    updated.ground_matching_csm_smear_deviation <= 0.0) {
+    updated.ground_matching_min_forward_distance >= updated.ground_matching_max_forward_distance) {
     result.successful = false;
     result.reason = "ground marking log-odds, observation age, or matching parameters are invalid";
     return result;
@@ -1050,10 +981,6 @@ geometry_msgs::msg::TransformStamped Ros2SlamWrapper::poseToTransformStamped(
 
 void Ros2SlamWrapper::publishDebugImage(const rclcpp::Time & stamp)
 {
-  if (!parameters_->csm_debug_enable) {
-    return;
-  }
-
   const auto low_res_debug = slam_system_->getLatestLowResDebug();
   const auto high_res_debug = slam_system_->getLatestHighResDebug();
   if (low_res_debug && !low_res_debug->pixels.empty()) {

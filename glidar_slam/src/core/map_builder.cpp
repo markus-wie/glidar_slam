@@ -6,6 +6,7 @@
 #include <utility>
 
 namespace glidar_slam::core {
+
 using global_map::GroundMarkingGrid;
 using global_map::GroundTextureGrid;
 using global_map::LocalMapData;

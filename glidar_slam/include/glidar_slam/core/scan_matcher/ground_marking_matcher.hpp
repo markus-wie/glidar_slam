@@ -5,9 +5,10 @@
 #include <optional>
 #include <vector>
 
-#include "glidar_slam/core/correlative_scan_matcher.hpp"
 #include "glidar_slam/core/ground_plane_extractor.hpp"
 #include "glidar_slam/core/parameters.hpp"
+#include "glidar_slam/core/scan_matcher.hpp"
+#include "glidar_slam/core/scan_matcher/correlative_scan_matcher.hpp"
 #include "glidar_slam/core/types.hpp"
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
@@ -17,7 +18,8 @@ namespace glidar_slam::core {
 class GroundMarkingMatcher
 {
 public:
-  explicit GroundMarkingMatcher(const std::shared_ptr<Parameters> & parameters);
+  GroundMarkingMatcher(
+    const std::shared_ptr<Parameters> & parameters, std::unique_ptr<ScanMatcher> scan_matcher);
 
   std::vector<Point2D> extractMarkingPoints(const pcl::PointCloud<pcl::PointXYZRGBA> & cloud) const;
   pcl::PointCloud<pcl::PointXYZRGBA> toPCL(const std::vector<Point2D> & points) const;
@@ -41,8 +43,7 @@ private:
     const Pose2D & relative_pose) const;
 
   std::shared_ptr<Parameters> parameters_;
-  std::shared_ptr<Parameters> scan_matcher_parameters_;
-  std::unique_ptr<CorrelativeScanMatcher> scan_matcher_;
+  std::unique_ptr<ScanMatcher> scan_matcher_;
 };
 
 }  // namespace glidar_slam::core

@@ -1,4 +1,4 @@
-#include "glidar_slam/core/correlative_scan_matcher.hpp"
+#include "glidar_slam/core/scan_matcher/correlative_scan_matcher.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -63,6 +63,16 @@ double evaluatePoseScore(
 CorrelativeScanMatcher::CorrelativeScanMatcher(const std::shared_ptr<Parameters> & params)
 : params_(params)
 {
+}
+
+std::vector<double> CorrelativeScanMatcher::fieldResolutions() const
+{
+  std::vector<double> resolutions;
+  resolutions.reserve(params_->csm_search_stages.size());
+  for (const auto & stage : params_->csm_search_stages) {
+    resolutions.push_back(stage.field_resolution);
+  }
+  return resolutions;
 }
 
 double LikelihoodField::getScore(double x, double y) const
@@ -286,7 +296,6 @@ void CorrelativeScanMatcher::evaluateYawSlice(
       double total_score = 0.0;
       int valid_points = 0;
 
-      // Hot Loop: Completely linear and branchless where possible
       for (const auto & point : rotated_points) {
         const double map_x = candidate_x + point.x;
         const double map_y = candidate_y + point.y;
@@ -297,7 +306,6 @@ void CorrelativeScanMatcher::evaluateYawSlice(
         const int x0 = static_cast<int>(std::floor(px));
         const int y0 = static_cast<int>(std::floor(py));
 
-        // Fast out-of-bounds gate
         if (x0 >= 0 && x0 < max_x && y0 >= 0 && y0 < max_y) {
           const double dx = px - x0;
           const double dy = py - y0;
@@ -317,7 +325,7 @@ void CorrelativeScanMatcher::evaluateYawSlice(
       }
 
       double final_score = -1.0;
-      if (valid_points >= static_cast<int>(points.size() * 0.3)) {  // 30% overlap gate
+      if (valid_points >= static_cast<int>(points.size() * 0.3)) {
         final_score = total_score / static_cast<double>(points.size());
       }
 

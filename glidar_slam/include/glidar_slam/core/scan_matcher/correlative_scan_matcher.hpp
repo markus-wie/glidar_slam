@@ -12,6 +12,7 @@
 #include "Eigen/Geometry"
 #include "glidar_slam/core/likelihood_field.hpp"
 #include "glidar_slam/core/parameters.hpp"
+#include "glidar_slam/core/scan_matcher.hpp"
 #include "glidar_slam/core/submap_grid.hpp"
 #include "glidar_slam/core/types.hpp"
 
@@ -40,14 +41,16 @@ struct CsmResult
   static CsmResult::DebugImage toDebugImage(const LikelihoodField & field);
 };
 
-class CorrelativeScanMatcher
+class CorrelativeScanMatcher : public ScanMatcher
 {
 public:
   explicit CorrelativeScanMatcher(const std::shared_ptr<Parameters> & params);
 
   CsmResult match(
     const SubmapGrid & submap_grid, const std::vector<Point2D> & current_points,
-    const Pose2D & pose_estimate) const;
+    const Pose2D & pose_estimate) const override;
+
+  std::vector<double> fieldResolutions() const override;
 
 private:
   struct SearchResponse

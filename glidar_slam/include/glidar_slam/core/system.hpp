@@ -9,15 +9,16 @@
 #include <utility>
 #include <vector>
 
-#include "glidar_slam/core/correlative_scan_matcher.hpp"
 #include "glidar_slam/core/graph_optimizer.hpp"
-#include "glidar_slam/core/ground_marking_matcher.hpp"
 #include "glidar_slam/core/ground_plane_extractor.hpp"
 #include "glidar_slam/core/key_frame.hpp"
 #include "glidar_slam/core/loop_closure.hpp"
 #include "glidar_slam/core/map_builder.hpp"
 #include "glidar_slam/core/map_database.hpp"
 #include "glidar_slam/core/parameters.hpp"
+#include "glidar_slam/core/scan_matcher.hpp"
+#include "glidar_slam/core/scan_matcher/correlative_scan_matcher.hpp"
+#include "glidar_slam/core/scan_matcher/ground_marking_matcher.hpp"
 #include "glidar_slam/core/sensor_data.hpp"
 #include "glidar_slam/core/submap_grid.hpp"
 #include "gtsam/geometry/Pose3.h"
@@ -27,7 +28,10 @@ namespace glidar_slam::core {
 class SlamSystem
 {
 public:
-  explicit SlamSystem(const std::shared_ptr<Parameters> & parameters);
+  SlamSystem(
+    const std::shared_ptr<Parameters> & parameters, std::unique_ptr<ScanMatcher> scan_matcher,
+    std::unique_ptr<ScanMatcher> ground_scan_matcher,
+    std::unique_ptr<ScanMatcher> loop_scan_matcher);
   ~SlamSystem();
 
   bool process(
@@ -66,7 +70,7 @@ private:
   std::shared_ptr<MapDatabase> map_database_;
 
   // subsystems
-  std::unique_ptr<CorrelativeScanMatcher> scan_matcher_;
+  std::unique_ptr<ScanMatcher> scan_matcher_;
   std::unique_ptr<GroundMarkingMatcher> ground_marking_matcher_;
   std::unique_ptr<GraphOptimizer> graph_optimizer_;
   std::unique_ptr<LoopClosureDetector> loop_closure_detector_;

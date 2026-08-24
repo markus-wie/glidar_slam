@@ -106,27 +106,48 @@ glidar_slam:
     # maximum consistency 
     loop_maximum_consistency_error: 0.5
     
-    #### Correlative Scan Matcher Parameters
-    csm_debug_enable: true
-    csm_smear_deviation: 0.1
-    # Uses exp(-distance / csm_smear_deviation) instead of a Gaussian kernel.
-    csm_use_laplace_kernel: true
-    # Uses a linear-time Euclidean distance transform instead of point-wise Gaussian splatting.
-    csm_use_distance_transform: true
-    # Uses TBB for parallel candidate evaluation when TBB is available at build time.
-    csm_use_tbb: true
+    #### Dynamically loaded scan matcher plugins
+    csm_local_tracker:
+      plugin: glidar_slam/CorrelativeScanMatcherPlugin
+      csm_smear_deviation: 0.1
+      csm_use_laplace_kernel: true
+      csm_use_distance_transform: false
+      csm_use_tbb: true
+      csm_debug_enable: true
+      csm_stage_resolutions: [0.05, 0.05, 0.03]
+      csm_stage_translation_steps: [0.1, 0.01, 0.001]
+      csm_stage_window_x: [1.0, 0.15, 0.015]
+      csm_stage_window_y: [1.0, 0.15, 0.015]
+      csm_stage_angular_steps: [0.1, 0.01, 0.001]
+      csm_stage_window_yaw: [1.0, 0.15, 0.015]
 
-    #### Cascading CSM stages. Windows denote the width of the area around the previous stage result
-    ## Very high resolutions in junction with high csm_smear_deviation, the creation of the likelihood field can be very slow.
-    # Search resolutions [m] for each stage
-    csm_stage_resolutions: [0.05, 0.02, 0.02]
-    # Search window widths [m] for each stage
-    csm_stage_translation_steps: [0.1, 0.01, 0.001]
-    csm_stage_window_x: [1.0, 0.15, 0.015]
-    csm_stage_window_y: [1.0, 0.15, 0.015]
-    # Search window widths [rad] for each stage
-    csm_stage_angular_steps: [0.1, 0.01, 0.001]
-    csm_stage_window_yaw: [1.0, 0.15, 0.015]
+    csm_ground_marking_detection:
+      plugin: glidar_slam/CorrelativeScanMatcherPlugin
+      csm_smear_deviation: 0.1
+      csm_use_laplace_kernel: true
+      csm_use_distance_transform: false
+      csm_use_tbb: true
+      csm_debug_enable: false
+      csm_stage_resolutions: [0.05, 0.05, 0.03]
+      csm_stage_translation_steps: [0.1, 0.01, 0.001]
+      csm_stage_window_x: [1.0, 0.15, 0.015]
+      csm_stage_window_y: [1.0, 0.15, 0.015]
+      csm_stage_angular_steps: [0.1, 0.01, 0.001]
+      csm_stage_window_yaw: [1.0, 0.15, 0.015]
+
+    csm_loop_closure_detection:
+      plugin: glidar_slam/CorrelativeScanMatcherPlugin
+      csm_smear_deviation: 0.1
+      csm_use_laplace_kernel: true
+      csm_use_distance_transform: false
+      csm_use_tbb: true
+      csm_debug_enable: false
+      csm_stage_resolutions: [0.05, 0.05, 0.03]
+      csm_stage_translation_steps: [0.1, 0.01, 0.001]
+      csm_stage_window_x: [4.0, 0.15, 0.015]
+      csm_stage_window_y: [4.0, 0.15, 0.015]
+      csm_stage_angular_steps: [0.1, 0.01, 0.001]
+      csm_stage_window_yaw: [0.8, 0.15, 0.015]
 
     # iSAM 2 Parameters
     isam_relinearizeThreshold: 0.1

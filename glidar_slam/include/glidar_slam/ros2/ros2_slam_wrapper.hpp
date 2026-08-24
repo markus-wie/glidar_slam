@@ -11,6 +11,7 @@
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "glidar_slam/core/parameters.hpp"
 #include "glidar_slam/core/system.hpp"
+#include "glidar_slam/ros2/scan_matcher_interface.hpp"
 #include "gtsam/geometry/Pose3.h"
 #include "message_filters/subscriber.hpp"
 #include "message_filters/sync_policies/approximate_time.hpp"
@@ -18,6 +19,7 @@
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
+#include "pluginlib/class_loader.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
@@ -80,7 +82,7 @@ private:
     const std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> & scans_transformed,
     nav_msgs::msg::OccupancyGrid & grid, const rclcpp::Time & stamp) const;
 
-  void processCSMParameters();
+  std::unique_ptr<ScanMatcherInterface> loadScanMatcher(const std::string & name);
 
   static geometry_msgs::msg::TransformStamped poseToTransformStamped(
     const gtsam::Pose3 & map_to_odom, const std::string & parent_frame,
@@ -117,6 +119,7 @@ private:
     const KeyFrame & keyframe, const std::string & frame);
 
   // Modules
+  std::unique_ptr<pluginlib::ClassLoader<ScanMatcherInterface>> scan_matcher_loader_;
   std::unique_ptr<SlamSystem> slam_system_;
 
   // ROS2 interfaces
