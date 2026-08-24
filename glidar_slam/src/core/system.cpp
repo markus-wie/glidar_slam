@@ -1,6 +1,7 @@
 #include "glidar_slam/core/system.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <unordered_map>
@@ -15,10 +16,43 @@ namespace glidar_slam::core {
 
 namespace {
 
+constexpr double kUnobservablePlanarVariance = 1e6;
+
 double elapsedMilliseconds(const std::chrono::steady_clock::time_point & start)
 {
   return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
     .count();
+}
+
+gtsam::Pose3 initialPoseFromGroundObservation(
+  const std::optional<GroundPlaneObservation> & observation)
+{
+  if (
+    !observation || !observation->normal_in_base.allFinite() ||
+    observation->normal_in_base.squaredNorm() < 1e-12F ||
+    !std::isfinite(observation->distance_to_base)) {
+    return gtsam::Pose3();
+  }
+
+  const Eigen::Vector3d normal_in_base = observation->normal_in_base.cast<double>().normalized();
+  const Eigen::Quaterniond map_from_base =
+    Eigen::Quaterniond::FromTwoVectors(normal_in_base, Eigen::Vector3d::UnitZ());
+  return gtsam::Pose3(
+    gtsam::Rot3::Quaternion(
+      map_from_base.w(), map_from_base.x(), map_from_base.y(), map_from_base.z()),
+    gtsam::Point3(0.0, 0.0, observation->distance_to_base));
+}
+
+gtsam::Matrix66 planarOdometryCovariance(const gtsam::Matrix66 & covariance)
+{
+  gtsam::Matrix66 result = covariance;
+  const std::array<int, 3> unobservable_dimensions{0, 1, 5};
+  for (const int dimension : unobservable_dimensions) {
+    result.row(dimension).setZero();
+    result.col(dimension).setZero();
+    result(dimension, dimension) = kUnobservablePlanarVariance;
+  }
+  return result;
 }
 
 }  // namespace
@@ -76,7 +110,7 @@ bool SlamSystem::process(
   const gtsam::Pose3 latest_odom_pose = projectPlanar(odom_pose);
 
   if (map_database_->size() == 0) {
-    const gtsam::Pose3 initial_pose = gtsam::Pose3();
+    const gtsam::Pose3 initial_pose = initialPoseFromGroundObservation(ground_observation);
     graph_optimizer_->initialize(initial_pose, static_cast<uint64_t>(timestamp * 1e6));
     auto new_keyframe = std::make_shared<KeyFrame>(
       map_database_->incrementNextKey(), timestamp, initial_pose, latest_odom_pose, laser_scan,
@@ -189,7 +223,8 @@ bool SlamSystem::process(
 
   // Add Odometry Factor
   graph_optimizer_->addRelativeFactor(
-    reference_keyframe->key, next_keyframe_key, raw_odom_delta, odom_covariance);
+    reference_keyframe->key, next_keyframe_key, raw_odom_delta,
+    planarOdometryCovariance(odom_covariance));
 
   // Add LiDAR Scan Matching Factor
   graph_optimizer_->addRelativeFactor(
@@ -288,8 +323,8 @@ bool SlamSystem::process(
 
   if (parameters_->csm_debug_enable) {
     SAM_INFO(
-      "GTSAM Covariance (diagonal): x={}, y={}, z={}", optimized_covariance(5, 5),
-      optimized_covariance(4, 4), optimized_covariance(3, 3));
+      "GTSAM Covariance (diagonal): x={}, y={}, z={}", optimized_covariance(3, 3),
+      optimized_covariance(4, 4), optimized_covariance(5, 5));
   }
 
   const std::shared_ptr<KeyFrame> new_keyframe = std::make_shared<KeyFrame>(

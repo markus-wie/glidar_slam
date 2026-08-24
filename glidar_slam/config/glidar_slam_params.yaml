@@ -36,7 +36,7 @@ glidar_slam:
     submap_window_size: 5
 
     # Ground Observation Parameters
-    ground_debug_enable: true
+    ground_debug_enable: false
     ground_debug_cloud_topic: glidar_slam/debug/ground_inliers
     ground_debug_marker_topic: glidar_slam/debug/ground_plane
     ground_debug_image_topic: glidar_slam/debug/ground_overlay
@@ -57,7 +57,7 @@ glidar_slam:
     ground_extraction_max_distance: 3.0
     # Distance threshold to declare inlies during ground plane fitting. 
     # The method uses the MSCA method which is more robust against noise, so this value can be relatively large
-    ground_extraction_distance_threshold: 0.1
+    ground_extraction_distance_threshold: 0.05
     ground_mapping_enable_texture_mapping: true
     ground_mapping_enable_ground_marking_mapping: true
     ground_marking_map_topic: ground_markings_map
