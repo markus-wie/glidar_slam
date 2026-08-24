@@ -20,7 +20,7 @@ glidar_slam:
 
     # Odometry Covariance Override
     # [x, y, z, roll, pitch, yaw]
-    odom_covariance_diagonal: [0.2, 0.2, 1.0e-6, 1.0e-6, 1.0e-6, 0.1]
+    odom_covariance_diagonal: [0.1, 0.1, 1.0e-6, 1.0e-6, 1.0e-6, 0.05]
 
     # General Parameters
     minimum_travel_distance: 0.4
@@ -73,7 +73,7 @@ glidar_slam:
     ground_matching_min_forward_distance: 0.0
     ground_matching_max_forward_distance: 2.0
     ground_matching_csm_smear_deviation: 0.1
-    ground_matching_debug_enable: true
+    ground_matching_debug_enable: false
     ground_matching_debug_topic: glidar_slam/debug/ground_matching
 
     #### Loop Closure Parameters
@@ -98,7 +98,7 @@ glidar_slam:
     loop_maximum_consistency_error: 0.5
     
     #### Correlative Scan Matcher Parameters
-    csm_debug_enable: true
+    csm_debug_enable: false
     csm_smear_deviation: 0.1
     # Uses a linear-time Euclidean distance transform instead of point-wise Gaussian splatting.
     csm_use_distance_transform: false

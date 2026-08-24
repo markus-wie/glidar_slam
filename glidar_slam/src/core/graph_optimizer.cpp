@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "Eigen/Eigenvalues"
 #include "glidar_slam/logger/logger.hpp"
 #include "gtsam/inference/Symbol.h"
 #include "gtsam/linear/NoiseModel.h"
@@ -133,10 +134,25 @@ gtsam::Pose3 GraphOptimizer::projectPlanar(const gtsam::Pose3 & pose)
 gtsam::noiseModel::Gaussian::shared_ptr GraphOptimizer::covarianceFromMatrix(
   const gtsam::Matrix66 & covariance)
 {
-  gtsam::Matrix66 sanitized = covariance;
-  for (int i = 0; i < 6; ++i) {
-    sanitized(i, i) = std::max(sanitized(i, i), 1e-8);
+  constexpr double minimum_variance = 1e-8;
+  constexpr double unknown_variance = 1e6;
+
+  if (!covariance.allFinite()) {
+    return gtsam::noiseModel::Gaussian::Covariance(gtsam::Matrix66::Identity() * unknown_variance);
   }
+
+  gtsam::Matrix66 symmetric = 0.5 * (covariance + covariance.transpose());
+  Eigen::SelfAdjointEigenSolver<gtsam::Matrix66> solver(symmetric);
+  if (solver.info() != Eigen::Success || !solver.eigenvalues().allFinite()) {
+    return gtsam::noiseModel::Gaussian::Covariance(gtsam::Matrix66::Identity() * unknown_variance);
+  }
+  if (solver.eigenvalues().minCoeff() < -minimum_variance) {
+    return gtsam::noiseModel::Gaussian::Covariance(gtsam::Matrix66::Identity() * unknown_variance);
+  }
+
+  const gtsam::Matrix66 sanitized = solver.eigenvectors() *
+                                    solver.eigenvalues().cwiseMax(minimum_variance).asDiagonal() *
+                                    solver.eigenvectors().transpose();
   return gtsam::noiseModel::Gaussian::Covariance(sanitized);
 }
 

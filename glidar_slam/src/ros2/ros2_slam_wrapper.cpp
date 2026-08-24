@@ -38,6 +38,25 @@ using glidar_slam::core::global_map::GroundMarkingGrid;
 using glidar_slam::core::global_map::GroundTextureGrid;
 using glidar_slam::core::global_map::OccupancyGrid;
 
+namespace {
+
+constexpr double kUnknownOdometryVariance = 1e6;
+
+bool validOdometryCovarianceParameter(const std::vector<double> & covariance)
+{
+  return covariance.size() == 6 &&
+         std::all_of(covariance.begin(), covariance.end(), [](double value) {
+           return value == -1.0 || (std::isfinite(value) && value > 0.0);
+         });
+}
+
+double sanitizeOdometryVariance(double variance)
+{
+  return std::isfinite(variance) && variance > 0.0 ? variance : kUnknownOdometryVariance;
+}
+
+}  // namespace
+
 Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("glidar_slam", options)
 {
   parameters_ = std::make_shared<Parameters>();
@@ -73,6 +92,10 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
 
   parameters_->odom_covariance_diagonal = this->declare_parameter<std::vector<double>>(
     "odom_covariance_diagonal", std::vector<double>{-1.0, -1.0, -1.0, -1.0, -1.0, -1.0});
+  if (!validOdometryCovarianceParameter(parameters_->odom_covariance_diagonal)) {
+    throw std::runtime_error(
+      "odom_covariance_diagonal must contain six values that are -1 or finite and positive");
+  }
 
   parameters_->minimum_travel_distance =
     this->declare_parameter<double>("minimum_travel_distance", 0.5);
@@ -103,6 +126,11 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->declare_parameter<double>("ground_distance_sigma", 0.03);
   parameters_->ground_fallback_variance =
     this->declare_parameter<double>("ground_fallback_variance", 1.0);
+  if (
+    !std::isfinite(parameters_->ground_observation_max_age_sec) ||
+    parameters_->ground_observation_max_age_sec <= 0.0) {
+    throw std::runtime_error("ground_observation_max_age_sec must be finite and positive");
+  }
   const std::string ground_roi_ratios =
     this->declare_parameter<std::string>("ground_roi_ratios", "0.0 0.0 0.2 0.4");
   if (!parseGroundRoiRatios(ground_roi_ratios, parameters_->ground_roi_ratios)) {
@@ -220,8 +248,8 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   ground_synchronizer_->registerCallback(std::bind(
     &Ros2SlamWrapper::ScanRGBDCallback, this, std::placeholders::_1, std::placeholders::_2,
     std::placeholders::_3, std::placeholders::_4));
-  rclcpp::Duration max_delay = rclcpp::Duration::from_seconds(0.05);
-  ground_synchronizer_->setMaxIntervalDuration(max_delay);
+  ground_synchronizer_->setMaxIntervalDuration(
+    rclcpp::Duration::from_seconds(parameters_->ground_observation_max_age_sec));
 
   // Publishers
   marker_array_publisher_ =
@@ -340,9 +368,10 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
     const std::string & name = parameter.get_name();
     if (name == "odom_covariance_diagonal") {
       updated.odom_covariance_diagonal = parameter.as_double_array();
-      if (updated.odom_covariance_diagonal.size() != 6) {
+      if (!validOdometryCovarianceParameter(updated.odom_covariance_diagonal)) {
         result.successful = false;
-        result.reason = "odom_covariance_diagonal must contain six values";
+        result.reason =
+          "odom_covariance_diagonal must contain six values that are -1 or finite and positive";
         return result;
       }
     } else if (name == "minimum_travel_distance") {
@@ -447,6 +476,8 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
   }
 
   if (
+    !std::isfinite(updated.ground_observation_max_age_sec) ||
+    updated.ground_observation_max_age_sec <= 0.0 ||
     updated.ground_matching_minimum_marking_count < 0 ||
     !std::isfinite(updated.ground_matching_minimum_score) ||
     updated.ground_matching_minimum_score < 0.0 ||
@@ -456,11 +487,13 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
     !std::isfinite(updated.ground_matching_csm_smear_deviation) ||
     updated.ground_matching_csm_smear_deviation <= 0.0) {
     result.successful = false;
-    result.reason = "ground matching minimum count and score must be finite and non-negative";
+    result.reason = "ground observation age and matching parameters are invalid";
     return result;
   }
 
   *parameters_ = std::move(updated);
+  ground_synchronizer_->setMaxIntervalDuration(
+    rclcpp::Duration::from_seconds(parameters_->ground_observation_max_age_sec));
 
   return result;
 }
@@ -478,6 +511,7 @@ void Ros2SlamWrapper::ScanRGBDCallback(
     cv_ptr_depth = cv_bridge::toCvShare(depth_msg, depth_msg->encoding);
   } catch (const cv_bridge::Exception & exception) {
     RCLCPP_WARN(this->get_logger(), "Cannot decode synchronized RGB-D input: %s", exception.what());
+    return;
   }
 
   // Get the latest odometry pose from tf.
@@ -547,6 +581,7 @@ void Ros2SlamWrapper::ScanRGBDCallback(
     RCLCPP_WARN(
       this->get_logger(), "Cannot transform RGB-D camera frame to base frame: %s",
       exception.what());
+    return;
   }
 
   const auto & translation = base_from_camera.transform.translation;
@@ -625,22 +660,24 @@ void Ros2SlamWrapper::odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr
   if (
     std::find(
       parameters_->odom_covariance_diagonal.begin(), parameters_->odom_covariance_diagonal.end(),
-      -1.0) == parameters_->odom_covariance_diagonal.end()) {
+      -1.0) != parameters_->odom_covariance_diagonal.end()) {
     // gtsam covariance in tangent space is [roll, pitch, yaw, x, y, z] (see gtsam::Pose3)
-    latest_odom_covariance_(0, 0) = msg->pose.covariance[21];
-    latest_odom_covariance_(1, 1) = msg->pose.covariance[28];
-    latest_odom_covariance_(2, 2) = msg->pose.covariance[35];
-    latest_odom_covariance_(3, 3) = msg->pose.covariance[0];
-    latest_odom_covariance_(4, 4) = msg->pose.covariance[7];
-    latest_odom_covariance_(5, 5) = msg->pose.covariance[14];
+    // We care about relative covariance, not the total of the odometries pose, that's why we use
+    // the twist covariance.
+    latest_odom_covariance_(0, 0) = sanitizeOdometryVariance(msg->twist.covariance[21]);
+    latest_odom_covariance_(1, 1) = sanitizeOdometryVariance(msg->twist.covariance[28]);
+    latest_odom_covariance_(2, 2) = sanitizeOdometryVariance(msg->twist.covariance[35]);
+    latest_odom_covariance_(3, 3) = sanitizeOdometryVariance(msg->twist.covariance[0]);
+    latest_odom_covariance_(4, 4) = sanitizeOdometryVariance(msg->twist.covariance[7]);
+    latest_odom_covariance_(5, 5) = sanitizeOdometryVariance(msg->twist.covariance[14]);
   } else {
     // the ros2 parameter keeps the ros2 convention which is [x, y, z, roll, pitch, yaw]
-    latest_odom_covariance_(0, 0) = parameters_->odom_covariance_diagonal[5];
+    latest_odom_covariance_(0, 0) = parameters_->odom_covariance_diagonal[3];
     latest_odom_covariance_(1, 1) = parameters_->odom_covariance_diagonal[4];
-    latest_odom_covariance_(2, 2) = parameters_->odom_covariance_diagonal[3];
-    latest_odom_covariance_(3, 3) = parameters_->odom_covariance_diagonal[2];
+    latest_odom_covariance_(2, 2) = parameters_->odom_covariance_diagonal[5];
+    latest_odom_covariance_(3, 3) = parameters_->odom_covariance_diagonal[0];
     latest_odom_covariance_(4, 4) = parameters_->odom_covariance_diagonal[1];
-    latest_odom_covariance_(5, 5) = parameters_->odom_covariance_diagonal[0];
+    latest_odom_covariance_(5, 5) = parameters_->odom_covariance_diagonal[2];
   }
 }
 

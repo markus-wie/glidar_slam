@@ -16,9 +16,9 @@ GroundPlaneFactor::GroundPlaneFactor(
   reference_normal_in_map_(reference_normal_in_map.normalized()),
   reference_plane_offset_(reference_plane_offset)
 {
-  const gtsam::Vector3 basis_axis = std::abs(reference_normal_in_map_.z()) < 0.9
-                                      ? gtsam::Vector3::UnitZ()
-                                      : gtsam::Vector3::UnitX();
+  const gtsam::Vector3 basis_axis =
+    std::abs(reference_normal_in_map_.dot(gtsam::Vector3::UnitZ())) < 0.9 ? gtsam::Vector3::UnitZ()
+                                                                          : gtsam::Vector3::UnitX();
   tangent_x_ = reference_normal_in_map_.cross(basis_axis).normalized();
   tangent_y_ = reference_normal_in_map_.cross(tangent_x_).normalized();
 }

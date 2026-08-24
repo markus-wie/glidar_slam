@@ -215,7 +215,7 @@ LikelihoodField CorrelativeScanMatcher::buildField(
   // define the max smear distance by a multiple of the deviation
   const double max_smear_distance = params_->csm_smear_deviation * 2.0;
   const double max_search_window = maximumSearchWindow(params_->csm_search_stages);
-  const double padding = max_smear_distance + max_search_window;
+  const double padding = 0;
   const double max_smear_distance_sq = max_smear_distance * max_smear_distance;
 
   double min_x = points[0].x;
@@ -366,7 +366,6 @@ double CorrelativeScanMatcher::scoreCandidate(
   const Pose2D & center, double angle_penalty) const
 {
   double score = 0.0;
-  int valid_points = 0;
 
   for (const auto & point : points) {
     const double eval_score = field.getScore(x + point.x, y + point.y);
@@ -374,14 +373,9 @@ double CorrelativeScanMatcher::scoreCandidate(
       continue;
     }
     score += eval_score;
-    ++valid_points;
   }
 
-  if (valid_points == 0) {
-    score = -1.0;
-  } else {
-    score /= static_cast<double>(valid_points);
-  }
+  score /= static_cast<double>(points.size());
 
   if (params_->csm_use_penalty && score > 0.0) {
     const double dx = x - center.x;
@@ -430,7 +424,7 @@ void CorrelativeScanMatcher::selectBestPose(SearchResult & result)
 }
 
 double CorrelativeScanMatcher::evaluatePose(
-  const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & pose)
+  const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & pose) const
 {
   double score = 0.0;
   double c = std::cos(pose.yaw);
@@ -458,14 +452,14 @@ double CorrelativeScanMatcher::evaluatePose(
 Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
   const std::vector<SearchResult> & results, const std::vector<CsmSearchStage> & stages)
 {
-  constexpr double max_variance = 500.0;
+  constexpr double max_variance = 25.0;
 
   Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
 
   if (results.empty() || stages.empty() || results.size() != stages.size()) {
     covariance(0, 0) = max_variance;
     covariance(1, 1) = max_variance;
-    covariance(2, 2) = 1000.0;
+    covariance(2, 2) = max_variance;
     return covariance;
   }
 
@@ -512,25 +506,59 @@ Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
   double variance_xx = 0.0;
   double variance_xy = 0.0;
   double variance_yy = 0.0;
-  for (const auto & [cell, response] : cell_responses) {
+
+  // Scaling factor to convert [0, 1] scores into sharp probability weights
+  constexpr double sharpness = 50.0;
+
+  for (const auto & [cell, response_score] : cell_responses) {
     const auto position = cell_positions[cell];
     const double dx = position.first - coarse_result.best_pose.x;
     const double dy = position.second - coarse_result.best_pose.y;
-    norm += response;
-    variance_xx += dx * dx * response;
-    variance_xy += dx * dy * response;
-    variance_yy += dy * dy * response;
+
+    // Softmax-style weighting
+    const double weight = std::exp(sharpness * (response_score - coarse_result.best_score));
+
+    norm += weight;
+    variance_xx += dx * dx * weight;
+    variance_xy += dx * dy * weight;
+    variance_yy += dy * dy * weight;
   }
 
   if (norm > 1e-9 && std::isfinite(norm)) {
     const double multiplier = 1.0 / std::max(coarse_result.best_score, 1e-9);
-    covariance(0, 0) = std::max(
+
+    Eigen::Matrix2d cov_xy;
+    // Calculate raw sample variance in meters squared (removed the old multiplier hack)
+    cov_xy(0, 0) = std::max(
       variance_xx / norm * multiplier,
       0.1 * coarse_stage.translation_step * coarse_stage.translation_step);
-    covariance(0, 1) = covariance(1, 0) = variance_xy / norm * multiplier;
-    covariance(1, 1) = std::max(
+    cov_xy(0, 1) = cov_xy(1, 0) = variance_xy / norm * multiplier;
+    cov_xy(1, 1) = std::max(
       variance_yy / norm * multiplier,
       0.1 * coarse_stage.translation_step * coarse_stage.translation_step);
+
+    // Eigendecomposition to identify flat ridges (unobservable directions)
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> solver(cov_xy);
+    Eigen::Vector2d eigenvalues = solver.eigenvalues();
+    Eigen::Matrix2d eigenvectors = solver.eigenvectors();
+
+    // Theoretical maximum variance for a uniform distribution on window [-W, W] is W^2 / 3
+    // Using window_x (or average search window) as bounding box reference
+    const double max_search_variance = (coarse_stage.window_x * coarse_stage.window_x) / 12.0;
+    const double saturation_threshold = 0.8 * max_search_variance;
+
+    for (int i = 0; i < 2; ++i) {
+      if (eigenvalues(i) > saturation_threshold) {
+        eigenvalues(i) = max_variance;  // Inflate only the unconstrained principal axis
+      }
+    }
+
+    // Reconstruct the covariance matrix
+    cov_xy = eigenvectors * eigenvalues.asDiagonal() * eigenvectors.transpose();
+
+    covariance(0, 0) = cov_xy(0, 0);
+    covariance(0, 1) = covariance(1, 0) = cov_xy(0, 1);
+    covariance(1, 1) = cov_xy(1, 1);
   } else {
     covariance(0, 0) = max_variance;
     covariance(1, 1) = max_variance;

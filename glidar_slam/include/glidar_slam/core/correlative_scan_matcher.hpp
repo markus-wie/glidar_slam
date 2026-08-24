@@ -113,8 +113,8 @@ private:
 
   static void selectBestPose(SearchResult & result);
 
-  static double evaluatePose(
-    const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & pose);
+  double evaluatePose(
+    const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & pose) const;
 
   static Eigen::Matrix3d computeCovariance(
     const std::vector<SearchResult> & results, const std::vector<CsmSearchStage> & stages);
