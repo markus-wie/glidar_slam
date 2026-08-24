@@ -50,6 +50,8 @@ struct CsmResult
   static CsmResult::DebugImage toDebugImage(const LikelihoodField & field);
 };
 
+constexpr double MAX_VARIANCE = 500.0;
+
 class CorrelativeScanMatcher
 {
 public:

@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <execution>
 #include <limits>
+#include <numeric>
 #include <vector>
 
 #include "Eigen/Dense"
@@ -56,9 +58,9 @@ CsmResult CorrelativeScanMatcher::match(
   const std::vector<CsmSearchStage> & stages = params_->csm_search_stages;
 
   if (stages.empty() || reference_points.empty() || current_points.empty()) {
-    result.covariance(0, 0) = 500.0;
-    result.covariance(1, 1) = 500.0;
-    result.covariance(2, 2) = 4.0;
+    result.covariance(0, 0) = MAX_VARIANCE;
+    result.covariance(1, 1) = MAX_VARIANCE;
+    result.covariance(2, 2) = MAX_VARIANCE;
     return result;
   }
 
@@ -265,16 +267,40 @@ LikelihoodField CorrelativeScanMatcher::buildField(
     }
   }
 
+  // Pre-allocate a boolean/byte grid to track occupied cells
+  // Using uint8_t is often faster than vector<bool> due to bit-packing proxy overheads
+  std::vector<uint8_t> occupied(field.data.size(), 0);
+  std::vector<int> unique_cell_indices;
+  unique_cell_indices.reserve(points.size());
+
+  // Map points to cells and deduplicate
   for (const auto & p : points) {
-    const int cx = static_cast<int>((p.x - field.origin_x) / field.resolution);
-    const int cy = static_cast<int>((p.y - field.origin_y) / field.resolution);
+    int cx = static_cast<int>((p.x - field.origin_x) / field.resolution);
+    int cy = static_cast<int>((p.y - field.origin_y) / field.resolution);
+
+    // Guard against floating point edge cases putting cx/cy equal to width/height
+    cx = std::max(0, std::min(cx, field.width - 1));
+    cy = std::max(0, std::min(cy, field.height - 1));
+
+    const int idx = cy * field.width + cx;
+    if (!occupied[idx]) {
+      occupied[idx] = 1;
+      unique_cell_indices.push_back(idx);
+    }
+  }
+
+  // Splat kernel only for unique cells
+  for (const int center_idx : unique_cell_indices) {
+    const int cx = center_idx % field.width;
+    const int cy = center_idx / field.width;
 
     for (const auto & offset : kernel_offsets) {
       const int nx = cx + offset.dx;
       const int ny = cy + offset.dy;
+
       if (nx >= 0 && nx < field.width && ny >= 0 && ny < field.height) {
         const int idx = ny * field.width + nx;
-        field.data[idx] = std::max<float>(field.data[idx], offset.probability);
+        field.data[idx] = std::max(field.data[idx], offset.probability);
       }
     }
   }
@@ -452,14 +478,12 @@ double CorrelativeScanMatcher::evaluatePose(
 Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
   const std::vector<SearchResult> & results, const std::vector<CsmSearchStage> & stages)
 {
-  constexpr double max_variance = 25.0;
-
   Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
 
   if (results.empty() || stages.empty() || results.size() != stages.size()) {
-    covariance(0, 0) = max_variance;
-    covariance(1, 1) = max_variance;
-    covariance(2, 2) = max_variance;
+    covariance(0, 0) = MAX_VARIANCE;
+    covariance(1, 1) = MAX_VARIANCE;
+    covariance(2, 2) = MAX_VARIANCE;
     return covariance;
   }
 
@@ -476,8 +500,8 @@ Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
   if (
     coarse_result.responses.empty() || !std::isfinite(coarse_result.best_score) ||
     coarse_result.best_score <= 1e-9) {
-    covariance(0, 0) = max_variance;
-    covariance(1, 1) = max_variance;
+    covariance(0, 0) = MAX_VARIANCE;
+    covariance(1, 1) = MAX_VARIANCE;
     covariance(2, 2) = 1000.0 * fine_stage.angular_step * fine_stage.angular_step;
     return covariance;
   }
@@ -507,7 +531,7 @@ Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
   double variance_xy = 0.0;
   double variance_yy = 0.0;
 
-  // Scaling factor to convert [0, 1] scores into sharp probability weights
+  // Scaling factor to convert [0, 1] scores into sharp probability weights.
   constexpr double sharpness = 50.0;
 
   for (const auto & [cell, response_score] : cell_responses) {
@@ -549,7 +573,7 @@ Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
 
     for (int i = 0; i < 2; ++i) {
       if (eigenvalues(i) > saturation_threshold) {
-        eigenvalues(i) = max_variance;  // Inflate only the unconstrained principal axis
+        eigenvalues(i) = MAX_VARIANCE;  // Inflate only the unconstrained principal axis
       }
     }
 
@@ -560,8 +584,8 @@ Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
     covariance(0, 1) = covariance(1, 0) = cov_xy(0, 1);
     covariance(1, 1) = cov_xy(1, 1);
   } else {
-    covariance(0, 0) = max_variance;
-    covariance(1, 1) = max_variance;
+    covariance(0, 0) = MAX_VARIANCE;
+    covariance(1, 1) = MAX_VARIANCE;
   }
 
   const double fine_threshold = fine_result.best_score - 0.1;
