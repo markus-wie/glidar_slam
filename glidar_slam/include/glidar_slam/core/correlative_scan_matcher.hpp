@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <vector>
 
 #include "Eigen/Dense"
@@ -12,15 +13,6 @@
 #include "glidar_slam/core/types.hpp"
 
 namespace glidar_slam::core {
-struct LaserScan
-{
-  uint64_t id;
-  double timestamp;
-  std::vector<Point2D> points;
-  Pose2D odom_pose;
-  Pose2D world_pose;
-};
-
 struct LikelihoodField
 {
   std::vector<double> data;
@@ -58,7 +50,7 @@ struct CsmResult
 class CorrelativeScanMatcher
 {
 public:
-  CorrelativeScanMatcher(const std::shared_ptr<Parameters> & params);
+  explicit CorrelativeScanMatcher(const std::shared_ptr<Parameters> & params);
 
   CsmResult match(const LaserScan & reference, const LaserScan & current) const;
 
