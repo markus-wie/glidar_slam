@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "glidar_slam/logger/logger.hpp"
+
 namespace glidar_slam::core {
 
 GroundMarkingMatcher::GroundMarkingMatcher(const std::shared_ptr<Parameters> & parameters)
@@ -133,7 +135,14 @@ std::optional<CsmResult> GroundMarkingMatcher::match(
   const std::vector<Point2D> filtered_current_points =
     filterCurrentPoints(reference_points, current_points, relative_pose);
 
-  return scan_matcher_->match(reference_points, filtered_current_points, relative_pose);
+  std::vector<double> resolutions;
+  resolutions.reserve(scan_matcher_parameters_->csm_search_stages.size());
+  for (const auto & stage : scan_matcher_parameters_->csm_search_stages) {
+    resolutions.push_back(stage.field_resolution);
+  }
+  SubmapGrid submap_grid(resolutions);
+  submap_grid.add(reference_points, 0);
+  return scan_matcher_->match(submap_grid, filtered_current_points, relative_pose);
 }
 
 std::vector<Point2D> GroundMarkingMatcher::filterCurrentPoints(

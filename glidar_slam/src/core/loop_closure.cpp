@@ -66,12 +66,21 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
     candidates.push_back(candidate);
   }
 
+  std::vector<double> resolutions;
+  resolutions.reserve(parameters_->csm_search_stages.size());
+  for (const auto & stage : parameters_->csm_search_stages) {
+    resolutions.push_back(stage.field_resolution);
+  }
+
   for (const std::shared_ptr<const KeyFrame> & candidate : candidates) {
     const std::vector<Point2D> & reference_points = candidate->scan->points2D();
     const std::vector<Point2D> & current_points = query.scan->points2D();
 
     const Pose2D pose_estimate = Utils::toPose2D(candidate->pose.inverse().compose(query.pose));
-    const CsmResult result = scan_matcher_->match(reference_points, current_points, pose_estimate);
+
+    SubmapGrid submap_grid(resolutions);
+    submap_grid.add(reference_points, candidate->key);
+    const CsmResult result = scan_matcher_->match(submap_grid, current_points, pose_estimate);
 
     if (result.score < parameters_->loop_minimum_score) {
       if (parameters_->loop_debug_enable) {
@@ -184,8 +193,8 @@ bool LoopClosureDetector::isCandidate(const KeyFrame & query, const KeyFrame & c
 
   // Add minimum variance floor to ensure the matrix is invertible
   cov_se2(0, 0) += 1e-4;  // Yaw minimum variance
-  cov_se2(1, 1) += parameters_->loop_minimum_xy_variance;
-  cov_se2(2, 2) += parameters_->loop_minimum_xy_variance;
+  cov_se2(1, 1) += 1e-4;
+  cov_se2(2, 2) += 1e-4;
 
   // Extract the 3-DOF error vector via Logmap to respect manifold geometry
   const gtsam::Vector6 log_error = gtsam::Pose3::Logmap(relative_pose);

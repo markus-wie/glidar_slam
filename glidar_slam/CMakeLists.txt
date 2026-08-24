@@ -27,6 +27,7 @@ include_directories(include)
 
 add_library(${PROJECT_NAME}_core SHARED
   src/core/correlative_scan_matcher.cpp
+  src/core/submap_grid.cpp
   src/core/graph_optimizer.cpp
   src/core/ground_marking_matcher.cpp
   src/core/ground_plane_extractor.cpp

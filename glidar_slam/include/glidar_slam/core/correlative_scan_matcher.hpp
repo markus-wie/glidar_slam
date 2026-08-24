@@ -10,24 +10,14 @@
 
 #include "Eigen/Dense"
 #include "Eigen/Geometry"
+#include "glidar_slam/core/likelihood_field.hpp"
 #include "glidar_slam/core/parameters.hpp"
+#include "glidar_slam/core/submap_grid.hpp"
 #include "glidar_slam/core/types.hpp"
 
 namespace glidar_slam::core {
-struct LikelihoodField
-{
-  std::vector<float> data;
-  double origin_x;
-  double origin_y;
-  int width;
-  int height;
-  int max_x_index;
-  int max_y_index;
-  double resolution;
 
-  // Bilinear interpolation for sub-grid scoring
-  double getScore(double x, double y) const;
-};
+constexpr double MAX_VARIANCE = 500.0;
 
 struct CsmResult
 {
@@ -50,15 +40,13 @@ struct CsmResult
   static CsmResult::DebugImage toDebugImage(const LikelihoodField & field);
 };
 
-constexpr double MAX_VARIANCE = 500.0;
-
 class CorrelativeScanMatcher
 {
 public:
   explicit CorrelativeScanMatcher(const std::shared_ptr<Parameters> & params);
 
   CsmResult match(
-    const std::vector<Point2D> & reference_points, const std::vector<Point2D> & current_points,
+    const SubmapGrid & submap_grid, const std::vector<Point2D> & current_points,
     const Pose2D & pose_estimate) const;
 
 private:
@@ -85,26 +73,21 @@ private:
     std::size_t candidates_per_yaw{0};
   };
 
+  SearchResult searchSpace(
+    const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & center,
+    const CsmSearchStage & stage) const;
+
+  void evaluateYawSlice(
+    const std::vector<Point2D> & points, const LikelihoodField & field, const SearchGrid & grid,
+    std::size_t yaw_index, SearchResult & result) const;
+
   LikelihoodField buildField(const std::vector<Point2D> & points, double resolution) const;
 
   void buildDistanceTransformField(
     LikelihoodField & field, const std::vector<Point2D> & points) const;
 
   std::shared_ptr<const std::vector<LikelihoodField>> getLikelihoodFields(
-    const std::vector<Point2D> & reference_points,
-    const std::vector<CsmSearchStage> & stages) const;
-
-  SearchResult searchSpace(
-    const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & center,
-    const CsmSearchStage & stage) const;
-
-  void evaluateYawSlice(
-    const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & center,
-    const SearchGrid & grid, std::size_t yaw_index, SearchResult & result) const;
-
-  double scoreCandidate(
-    const std::vector<Point2D> & points, const LikelihoodField & field, double x, double y,
-    const Pose2D & center, double angle_penalty) const;
+    const SubmapGrid & submap_grid, const std::vector<CsmSearchStage> & stages) const;
 
   static void selectBestPose(SearchResult & result);
 
@@ -112,9 +95,6 @@ private:
     const std::vector<SearchResult> & results, const std::vector<CsmSearchStage> & stages);
 
   std::shared_ptr<Parameters> params_;
-
-  mutable std::vector<Point2D> cached_reference_points_;
-  mutable std::shared_ptr<const std::vector<LikelihoodField>> cached_fields_;
 };
 
 }  // namespace glidar_slam::core

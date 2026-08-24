@@ -18,19 +18,6 @@ namespace glidar_slam::core {
 
 namespace {
 
-bool sameReferencePoints(const std::vector<Point2D> & lhs, const std::vector<Point2D> & rhs)
-{
-  if (lhs.size() != rhs.size()) {
-    return false;
-  }
-  for (std::size_t index = 0; index < lhs.size(); ++index) {
-    if (lhs[index].x != rhs[index].x || lhs[index].y != rhs[index].y) {
-      return false;
-    }
-  }
-  return true;
-}
-
 std::vector<double> makeSearchPositions(double center, double window, double step)
 {
   const int sample_count = std::max(1, static_cast<int>(std::ceil(window / step)));
@@ -41,6 +28,30 @@ std::vector<double> makeSearchPositions(double center, double window, double ste
     positions.push_back(start + index * step);
   }
   return positions;
+}
+
+double scoreCandidate(
+  const std::vector<Point2D> & points, const LikelihoodField & field, double x, double y)
+{
+  double score = 0.0;
+
+  int valid_points = 0;
+  for (const auto & point : points) {
+    const double eval_score = field.getScore(x + point.x, y + point.y);
+    if (eval_score < 0.0) {
+      continue;
+    }
+    score += eval_score;
+    ++valid_points;
+  }
+
+  if (valid_points == 0) {
+    return -1.0;
+  }
+
+  score /= static_cast<double>(valid_points);
+
+  return score;
 }
 
 double evaluatePoseScore(
@@ -100,7 +111,7 @@ double LikelihoodField::getScore(double x, double y) const
 }
 
 CsmResult CorrelativeScanMatcher::match(
-  const std::vector<Point2D> & reference_points, const std::vector<Point2D> & current_points,
+  const SubmapGrid & submap_grid, const std::vector<Point2D> & current_points,
   const Pose2D & pose_estimate) const
 {
   const auto timing_start = std::chrono::steady_clock::now();
@@ -111,7 +122,7 @@ CsmResult CorrelativeScanMatcher::match(
 
   const std::vector<CsmSearchStage> & stages = params_->csm_search_stages;
 
-  if (stages.empty() || reference_points.empty() || current_points.empty()) {
+  if (stages.empty() || current_points.empty()) {
     result.covariance(0, 0) = MAX_VARIANCE;
     result.covariance(1, 1) = MAX_VARIANCE;
     result.covariance(2, 2) = MAX_VARIANCE;
@@ -119,7 +130,7 @@ CsmResult CorrelativeScanMatcher::match(
   }
 
   const std::shared_ptr<const std::vector<LikelihoodField>> fields =
-    getLikelihoodFields(reference_points, stages);
+    getLikelihoodFields(submap_grid, stages);
 
   if (params_->debug_timings) {
     const double elapsed_ms =
@@ -214,127 +225,16 @@ CsmResult CorrelativeScanMatcher::match(
 }
 
 std::shared_ptr<const std::vector<LikelihoodField>> CorrelativeScanMatcher::getLikelihoodFields(
-  const std::vector<Point2D> & reference_points, const std::vector<CsmSearchStage> & stages) const
+  const SubmapGrid & submap_grid, const std::vector<CsmSearchStage> & stages) const
 {
-  const bool cache_matches =
-    cached_fields_ && sameReferencePoints(cached_reference_points_, reference_points);
-
-  if (cache_matches) {
-    return cached_fields_;
-  }
-
   auto fields = std::make_shared<std::vector<LikelihoodField>>();
   fields->reserve(stages.size());
   for (const auto & stage : stages) {
-    fields->push_back(buildField(reference_points, stage.field_resolution));
+    fields->push_back(submap_grid.getLikelihoodField(
+      stage.field_resolution, params_->csm_smear_deviation, params_->csm_use_distance_transform,
+      params_->debug_timings));
   }
-
-  cached_reference_points_ = reference_points;
-
-  cached_fields_ = std::move(fields);
-  return cached_fields_;
-}
-
-LikelihoodField CorrelativeScanMatcher::buildField(
-  const std::vector<Point2D> & points, double resolution) const
-{
-  LikelihoodField field;
-  field.resolution = resolution;
-
-  if (points.empty()) {
-    return field;
-  }
-
-  // define the max smear distance by a multiple of the deviation
-  const double max_smear_distance = params_->csm_smear_deviation * 2.0;
-  const double padding = 0;
-  const double max_smear_distance_sq = max_smear_distance * max_smear_distance;
-
-  double min_x = points[0].x;
-  double max_x = points[0].x;
-  double min_y = points[0].y;
-  double max_y = points[0].y;
-  for (const auto & p : points) {
-    min_x = std::min(min_x, p.x);
-    max_x = std::max(max_x, p.x);
-    min_y = std::min(min_y, p.y);
-    max_y = std::max(max_y, p.y);
-  }
-
-  // Pad grid by max search distance
-  field.origin_x = min_x - padding;
-  field.origin_y = min_y - padding;
-  field.width =
-    std::max(2, static_cast<int>(std::ceil((max_x - min_x + 2 * padding) / resolution)) + 1);
-  field.height =
-    std::max(2, static_cast<int>(std::ceil((max_y - min_y + 2 * padding) / resolution)) + 1);
-  field.max_x_index = field.width - 1;
-  field.max_y_index = field.height - 1;
-  field.data.assign(
-    static_cast<std::size_t>(field.width) * static_cast<std::size_t>(field.height), 0.0F);
-
-  // Splat points onto grid
-  const int rad = std::ceil(max_smear_distance / resolution);
-  const double denom = 2.0 * params_->csm_smear_deviation * params_->csm_smear_deviation;
-  const double resolution_sq = resolution * resolution;
-  const int kernel_width = 2 * rad + 1;
-
-  struct KernelOffset
-  {
-    int dx;
-    int dy;
-    float probability;
-  };
-
-  std::vector<KernelOffset> kernel_offsets;
-  kernel_offsets.reserve(static_cast<std::size_t>(kernel_width) * kernel_width);
-  for (int dy = -rad; dy <= rad; ++dy) {
-    for (int dx = -rad; dx <= rad; ++dx) {
-      const double dist_sq = (dx * dx + dy * dy) * resolution_sq;
-      if (dist_sq <= max_smear_distance_sq) {
-        kernel_offsets.push_back({dx, dy, static_cast<float>(std::exp(-dist_sq / denom))});
-      }
-    }
-  }
-
-  // Pre-allocate a boolean/byte grid to track occupied cells
-  // Using uint8_t is often faster than vector<bool> due to bit-packing proxy overheads
-  std::vector<uint8_t> occupied(field.data.size(), 0);
-  std::vector<int> unique_cell_indices;
-  unique_cell_indices.reserve(points.size());
-
-  // Map points to cells and deduplicate
-  for (const auto & p : points) {
-    int cx = static_cast<int>((p.x - field.origin_x) / field.resolution);
-    int cy = static_cast<int>((p.y - field.origin_y) / field.resolution);
-
-    // Guard against floating point edge cases putting cx/cy equal to width/height
-    cx = std::max(0, std::min(cx, field.width - 1));
-    cy = std::max(0, std::min(cy, field.height - 1));
-
-    const int idx = cy * field.width + cx;
-    if (!occupied[idx]) {
-      occupied[idx] = 1;
-      unique_cell_indices.push_back(idx);
-    }
-  }
-
-  // Splat kernel only for unique cells
-  for (const int center_idx : unique_cell_indices) {
-    const int cx = center_idx % field.width;
-    const int cy = center_idx / field.width;
-
-    for (const auto & offset : kernel_offsets) {
-      const int nx = cx + offset.dx;
-      const int ny = cy + offset.dy;
-
-      if (nx >= 0 && nx < field.width && ny >= 0 && ny < field.height) {
-        const int idx = ny * field.width + nx;
-        field.data[idx] = std::max(field.data[idx], offset.probability);
-      }
-    }
-  }
-  return field;
+  return fields;
 }
 
 CorrelativeScanMatcher::SearchResult CorrelativeScanMatcher::searchSpace(
@@ -360,11 +260,11 @@ CorrelativeScanMatcher::SearchResult CorrelativeScanMatcher::searchSpace(
 
   if (params_->csm_use_tbb) {
     tbb::parallel_for(std::size_t{0}, grid.yaw_positions.size(), [&](std::size_t yaw_index) {
-      evaluateYawSlice(points, field, center, grid, yaw_index, result);
+      evaluateYawSlice(points, field, grid, yaw_index, result);
     });
   } else {
     for (std::size_t yaw_index = 0; yaw_index < grid.yaw_positions.size(); ++yaw_index) {
-      evaluateYawSlice(points, field, center, grid, yaw_index, result);
+      evaluateYawSlice(points, field, grid, yaw_index, result);
     }
   }
 
@@ -373,17 +273,12 @@ CorrelativeScanMatcher::SearchResult CorrelativeScanMatcher::searchSpace(
 }
 
 void CorrelativeScanMatcher::evaluateYawSlice(
-  const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & center,
-  const SearchGrid & grid, std::size_t yaw_index, SearchResult & result) const
+  const std::vector<Point2D> & points, const LikelihoodField & field, const SearchGrid & grid,
+  std::size_t yaw_index, SearchResult & result) const
 {
   const double yaw = grid.yaw_positions[yaw_index];
   const double c = std::cos(yaw);
   const double s = std::sin(yaw);
-  const double dyaw = Utils::normalizeAngle(yaw - center.yaw);
-  const double angle_variance =
-    params_->csm_angle_penalty_std_dev * params_->csm_angle_penalty_std_dev;
-  const double angle_penalty =
-    std::clamp(1.0 - 0.2 * (dyaw * dyaw) / std::max(angle_variance, 1e-12), 0.0, 1.0);
 
   std::vector<Point2D> rotated_points(points.size());
   for (std::size_t point_index = 0; point_index < points.size(); ++point_index) {
@@ -395,43 +290,13 @@ void CorrelativeScanMatcher::evaluateYawSlice(
   for (std::size_t x_index = 0; x_index < grid.x_positions.size(); ++x_index) {
     for (std::size_t y_index = 0; y_index < grid.y_positions.size(); ++y_index) {
       const std::size_t response_index = yaw_offset + x_index * grid.y_positions.size() + y_index;
-      const double score = scoreCandidate(
-        rotated_points, field, grid.x_positions[x_index], grid.y_positions[y_index], center,
-        angle_penalty);
+
+      const double score =
+        scoreCandidate(rotated_points, field, grid.x_positions[x_index], grid.y_positions[y_index]);
       result.responses[response_index] = {
         {grid.x_positions[x_index], grid.y_positions[y_index], yaw}, score};
     }
   }
-}
-
-double CorrelativeScanMatcher::scoreCandidate(
-  const std::vector<Point2D> & points, const LikelihoodField & field, double x, double y,
-  const Pose2D & center, double angle_penalty) const
-{
-  double score = 0.0;
-
-  for (const auto & point : points) {
-    const double eval_score = field.getScore(x + point.x, y + point.y);
-    if (eval_score < 0.0) {
-      continue;
-    }
-    score += eval_score;
-  }
-
-  score /= static_cast<double>(points.size());
-
-  if (params_->csm_use_penalty && score > 0.0) {
-    const double dx = x - center.x;
-    const double dy = y - center.y;
-    // Basically a first order approximation of the exp function, but multiplied by 0.2 to make it
-    // less aggressive. Acts as a gaussian penalty on large deviations from the initial guess
-    const double distance_variance =
-      params_->csm_distance_penalty_std_dev * params_->csm_distance_penalty_std_dev;
-    const double distance_penalty =
-      std::clamp(1.0 - 0.2 * (dx * dx + dy * dy) / std::max(distance_variance, 1e-12), 0.0, 1.0);
-    score *= distance_penalty * angle_penalty;
-  }
-  return score;
 }
 
 void CorrelativeScanMatcher::selectBestPose(SearchResult & result)
@@ -631,10 +496,16 @@ CsmResult::DebugImage CsmResult::toDebugImage(const LikelihoodField & field)
     return out;
   }
 
-  for (size_t i = 0; i < field.data.size(); ++i) {
-    const double normalized = (field.data[i] - min_val) / span;
-    const double scaled = std::clamp(normalized, 0.0, 1.0) * 255.0;
-    out.pixels[i] = static_cast<std::uint8_t>(std::lround(scaled));
+  for (int y = 0; y < field.height; ++y) {
+    for (int x = 0; x < field.width; ++x) {
+      const int src_idx = y * field.width + x;
+
+      const int dst_idx = (field.height - 1 - y) * field.width + x;
+
+      const double normalized = (field.data[src_idx] - min_val) / span;
+      const double scaled = std::clamp(normalized, 0.0, 1.0) * 255.0;
+      out.pixels[dst_idx] = static_cast<std::uint8_t>(std::lround(scaled));
+    }
   }
 
   return out;
