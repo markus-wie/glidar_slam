@@ -32,10 +32,31 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
 {
   std::vector<LoopClosureProposal> proposals;
 
+  double search_radius = parameters_->loop_maximum_distance;  // Fallback
+
+  if (query.covariance) {
+    // Extract X and Y variance/covariance (GTSAM Pose3 translation indices are 3, 4)
+    const double var_x = (*query.covariance)(3, 3);
+    const double var_y = (*query.covariance)(4, 4);
+    const double cov_xy = (*query.covariance)(3, 4);
+
+    // Compute max eigenvalue of the 2x2 XY covariance matrix
+    const double trace = var_x + var_y;
+    const double det = var_x * var_y - cov_xy * cov_xy;
+    const double max_eigenvalue = (trace + std::sqrt(trace * trace - 4.0 * det)) / 2.0;
+
+    // Radius = Mahalanobis threshold * std::sqrt(max_eigenvalue).
+    search_radius = parameters_->loop_mahalanobis_threshold * std::sqrt(max_eigenvalue);
+  }
+
+  if (parameters_->loop_debug_enable) {
+    SAM_INFO("Loop search radius: query={}, search_radius={}", query.key, search_radius);
+  }
+
   // TODO: Consider using marginal covariance of the latest pose to determine the search radius for
   // nearby keyframes instead of a fixed distance threshold.
   std::vector<std::shared_ptr<const KeyFrame>> nearby_keyframes =
-    map_database_->getNearbyKeyFrames(query.pose, parameters_->loop_maximum_distance);
+    map_database_->getNearbyKeyFrames(query.pose, search_radius);
 
   std::vector<std::shared_ptr<const KeyFrame>> candidates;
   for (const std::shared_ptr<const KeyFrame> & candidate : nearby_keyframes) {
@@ -126,46 +147,66 @@ bool LoopClosureDetector::isCandidate(const KeyFrame & query, const KeyFrame & c
     return false;
   }
 
-  // TODO: First checking a hard distance threshold before computing the Mahalanobis distance is not
-  // really a good idea. This works now since the problem is small, but should be revisited later.
-  // Same for how nearby keyframes are retrieved in the first place.
+  // The mahalanobis distance is meant to act as a distance measure between a probability
+  // distribution and a point. Here, however, we want to check the "distance" between two
+  // probability distributions. To do that with the help of the mahalanobis distance, we first
+  // compute the distribution of the difference between the two poses. In the best case, we want the
+  // candidate to overlay perfectly with the query, which would result in a difference of zero.
+  // Since that is never exactly the case, we need to define a measure, in this case between the
+  // constructed distribution and the zero vector. On that, we can take the mahalanobis distance.
 
-  const gtsam::Pose3 relative_pose = candidate.pose.inverse().compose(query.pose);
-  const double dx = relative_pose.x();
-  const double dy = relative_pose.y();
-  const double distance_squared = dx * dx + dy * dy;
-  if (distance_squared > parameters_->loop_maximum_distance * parameters_->loop_maximum_distance) {
+  // Compute relative pose and Jacobians
+  gtsam::Matrix H_candidate;
+  gtsam::Matrix H_query;
+  const gtsam::Pose3 relative_pose = candidate.pose.between(query.pose, H_candidate, H_query);
+
+  // Hard yaw check is good for early rejection
+  if (std::abs(relative_pose.rotation().yaw()) > parameters_->loop_maximum_yaw_difference) {
     return false;
   }
 
-  const double yaw_difference = std::abs(relative_pose.rotation().yaw());
-  if (yaw_difference > parameters_->loop_maximum_yaw_difference) {
-    return false;
+  // Compute relative covariance (summing marginals projected via Jacobians)
+  gtsam::Matrix66 cov_candidate = candidate.covariance.value_or(gtsam::Matrix66::Identity() * 1e-4);
+  gtsam::Matrix66 cov_query = query.covariance.value_or(gtsam::Matrix66::Identity() * 1e-4);
+
+  gtsam::Matrix66 relative_cov_6d = H_candidate * cov_candidate * H_candidate.transpose() +
+                                    H_query * cov_query * H_query.transpose();
+
+  // Extract the 3x3 SE(2) block. GTSAM tangent space is [rx, ry, rz, tx, ty, tz]
+  // We want indices 2 (yaw), 3 (x), 4 (y)
+  gtsam::Matrix33 cov_se2;
+  std::vector<int> idx = {2, 3, 4};
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      cov_se2(i, j) = relative_cov_6d(idx[i], idx[j]);
+    }
   }
 
-  double variance_x = parameters_->loop_minimum_xy_variance;
-  double variance_y = parameters_->loop_minimum_xy_variance;
-  if (candidate.covariance) {
-    variance_x += (*candidate.covariance)(3, 3);
-    variance_y += (*candidate.covariance)(4, 4);
-  }
-  if (query.covariance) {
-    variance_x += (*query.covariance)(3, 3);
-    variance_y += (*query.covariance)(4, 4);
-  }
+  // Add minimum variance floor to ensure the matrix is invertible
+  cov_se2(0, 0) += 1e-4;  // Yaw minimum variance
+  cov_se2(1, 1) += parameters_->loop_minimum_xy_variance;
+  cov_se2(2, 2) += parameters_->loop_minimum_xy_variance;
 
-  const double mahalanobis_squared = dx * dx / variance_x + dy * dy / variance_y;
+  // Extract the 3-DOF error vector via Logmap to respect manifold geometry
+  const gtsam::Vector6 log_error = gtsam::Pose3::Logmap(relative_pose);
+  gtsam::Vector3 error_se2;
+  error_se2 << log_error(2), log_error(3), log_error(4);
+
+  // Compute exact Mahalanobis distance
+  const double mahalanobis_squared = error_se2.transpose() * cov_se2.inverse() * error_se2;
   const double mahalanobis_limit =
     parameters_->loop_mahalanobis_threshold * parameters_->loop_mahalanobis_threshold;
-  const bool is_candidate = mahalanobis_squared <= mahalanobis_limit;
+
   if (parameters_->loop_debug_enable) {
     SAM_INFO(
-      "Loop proximity gate: query={}, candidate={}, distance=({}, {}), distance_norm={}, "
-      "yaw={}, variance=({}, {}), mahalanobis_squared={}, limit={}, accepted={}",
-      query.key, candidate.key, dx, dy, std::hypot(dx, dy), yaw_difference, variance_x, variance_y,
-      mahalanobis_squared, mahalanobis_limit, is_candidate);
+      "Loop proximity gate: query={}, candidate={}, relative_pose=({}, {}, {}), error=({}, {}, "
+      "{}), mahalanobis_squared={}, limit={}, accepted={}",
+      query.key, candidate.key, relative_pose.x(), relative_pose.y(),
+      relative_pose.rotation().yaw(), error_se2(0), error_se2(1), error_se2(2), mahalanobis_squared,
+      mahalanobis_limit, mahalanobis_squared <= mahalanobis_limit);
   }
-  return is_candidate;
+
+  return mahalanobis_squared <= mahalanobis_limit;
 }
 
 void LoopClosureDetector::start()
