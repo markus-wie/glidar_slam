@@ -72,6 +72,9 @@ struct Parameters
   double ground_map_resolution{0.02};
   int ground_map_padding{2};
   int ground_marking_white_threshold{200};
+  double ground_marking_log_odds_hit{0.8};
+  double ground_marking_log_odds_miss{0.35};
+  double ground_marking_log_odds_cap{15.0};
   bool ground_matching_enable{false};
   int ground_matching_minimum_marking_count{20};
   double ground_matching_minimum_score{0.5};
@@ -173,6 +176,9 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  ground_map_resolution: " << p.ground_map_resolution << ",\n"
      << "  ground_map_padding: " << p.ground_map_padding << ",\n"
      << "  ground_marking_white_threshold: " << p.ground_marking_white_threshold << ",\n"
+     << "  ground_marking_log_odds_hit: " << p.ground_marking_log_odds_hit << ",\n"
+     << "  ground_marking_log_odds_miss: " << p.ground_marking_log_odds_miss << ",\n"
+     << "  ground_marking_log_odds_cap: " << p.ground_marking_log_odds_cap << ",\n"
      << "  ground_matching_enable: " << (p.ground_matching_enable ? "true" : "false") << ",\n"
      << "  ground_matching_minimum_marking_count: " << p.ground_matching_minimum_marking_count
      << ",\n"

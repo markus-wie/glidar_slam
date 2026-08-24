@@ -238,10 +238,6 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
     dynamic_first_row = std::min(dynamic_first_row, last_row);
   }
 
-  SAM_INFO(
-    "Ground plane extraction: dense extraction starting at row {} (ROI rows {}-{})",
-    dynamic_first_row, first_row, last_row);
-
   // Reserve a generous heuristic size to minimize reallocations
   observation.ground_cloud.reserve((last_row - dynamic_first_row) * (last_col - first_col) / 2);
 

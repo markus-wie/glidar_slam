@@ -34,17 +34,11 @@ using glidar_slam::core::LaserScan;
 using glidar_slam::core::Parameters;
 using glidar_slam::core::PointCloudXYZ;
 using glidar_slam::core::SlamSystem;
-using glidar_slam::core::global_map::GroundMarkingGrid;
-using glidar_slam::core::global_map::GroundTextureGrid;
-using glidar_slam::core::global_map::OccupancyGrid;
 
 Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("glidar_slam", options)
 {
   parameters_ = std::make_shared<Parameters>();
   slam_system_ = std::make_unique<SlamSystem>(parameters_);
-  occ_grid_ = std::make_unique<OccupancyGrid>(parameters_);
-  ground_marking_grid_ = std::make_unique<GroundMarkingGrid>(parameters_);
-  ground_texture_grid_ = std::make_unique<GroundTextureGrid>(parameters_);
   latest_odom_covariance_.setIdentity();
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*(tf_buffer_));
@@ -141,6 +135,12 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   parameters_->ground_map_padding = this->declare_parameter<int>("ground_map_padding", 2);
   parameters_->ground_marking_white_threshold =
     this->declare_parameter<int>("ground_marking_white_threshold", 200);
+  parameters_->ground_marking_log_odds_hit =
+    this->declare_parameter<double>("ground_marking_log_odds_hit", 0.8);
+  parameters_->ground_marking_log_odds_miss =
+    this->declare_parameter<double>("ground_marking_log_odds_miss", 0.35);
+  parameters_->ground_marking_log_odds_cap =
+    this->declare_parameter<double>("ground_marking_log_odds_cap", 15.0);
   parameters_->ground_matching_enable =
     this->declare_parameter<bool>("ground_matching_enable", false);
   parameters_->ground_matching_minimum_marking_count =
@@ -158,6 +158,14 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   parameters_->ground_matching_debug_topic = this->declare_parameter<std::string>(
     "ground_matching_debug_topic", "glidar_slam/debug/ground_matching");
   if (
+    !std::isfinite(parameters_->ground_marking_log_odds_hit) ||
+    parameters_->ground_marking_log_odds_hit <= 0.0 ||
+    parameters_->ground_marking_log_odds_hit >= 1.0 ||
+    !std::isfinite(parameters_->ground_marking_log_odds_miss) ||
+    parameters_->ground_marking_log_odds_miss <= 0.0 ||
+    parameters_->ground_marking_log_odds_miss >= 1.0 ||
+    !std::isfinite(parameters_->ground_marking_log_odds_cap) ||
+    parameters_->ground_marking_log_odds_cap <= 0.0 ||
     parameters_->ground_matching_minimum_marking_count < 0 ||
     !std::isfinite(parameters_->ground_matching_minimum_score) ||
     parameters_->ground_matching_minimum_score < 0.0 ||
@@ -168,8 +176,7 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     !std::isfinite(parameters_->ground_matching_csm_smear_deviation) ||
     parameters_->ground_matching_csm_smear_deviation <= 0.0) {
     throw std::runtime_error(
-      "Ground matching minimum count must be non-negative and minimum score must be finite and "
-      "non-negative");
+      "Ground marking log-odds and matching parameters are outside their valid ranges");
   }
 
   parameters_->loop_debug_enable = this->declare_parameter<bool>("loop_debug_enable", false);
@@ -409,6 +416,12 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.ground_map_padding = static_cast<int>(parameter.as_int());
     } else if (name == "ground_marking_white_threshold") {
       updated.ground_marking_white_threshold = static_cast<int>(parameter.as_int());
+    } else if (name == "ground_marking_log_odds_hit") {
+      updated.ground_marking_log_odds_hit = parameter.as_double();
+    } else if (name == "ground_marking_log_odds_miss") {
+      updated.ground_marking_log_odds_miss = parameter.as_double();
+    } else if (name == "ground_marking_log_odds_cap") {
+      updated.ground_marking_log_odds_cap = parameter.as_double();
     } else if (name == "ground_matching_enable") {
       updated.ground_matching_enable = parameter.as_bool();
     } else if (name == "ground_matching_minimum_marking_count") {
@@ -461,6 +474,12 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
   }
 
   if (
+    !std::isfinite(updated.ground_marking_log_odds_hit) ||
+    updated.ground_marking_log_odds_hit <= 0.0 || updated.ground_marking_log_odds_hit >= 1.0 ||
+    !std::isfinite(updated.ground_marking_log_odds_miss) ||
+    updated.ground_marking_log_odds_miss <= 0.0 || updated.ground_marking_log_odds_miss >= 1.0 ||
+    !std::isfinite(updated.ground_marking_log_odds_cap) ||
+    updated.ground_marking_log_odds_cap <= 0.0 ||
     !std::isfinite(updated.ground_observation_max_age_sec) ||
     updated.ground_observation_max_age_sec <= 0.0 ||
     updated.ground_matching_minimum_marking_count < 0 ||
@@ -472,7 +491,7 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
     !std::isfinite(updated.ground_matching_csm_smear_deviation) ||
     updated.ground_matching_csm_smear_deviation <= 0.0) {
     result.successful = false;
-    result.reason = "ground observation age and matching parameters are invalid";
+    result.reason = "ground marking log-odds, observation age, or matching parameters are invalid";
     return result;
   }
 
@@ -938,25 +957,27 @@ void Ros2SlamWrapper::publishGraph(
 }
 
 void Ros2SlamWrapper::publishOccupancyGrid(
-  const std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> & scans_transformed,
+  const std::shared_ptr<const glidar_slam::core::GlobalMapSnapshot> & map_snapshot,
   const rclcpp::Time & stamp)
 {
-  occ_grid_->buildFromScans(scans_transformed);
-
-  nav_msgs::msg::OccupancyGrid occupancy_grid_msg =
-    Utils::toRosMessage(*occ_grid_, parameters_->map_frame, stamp);
-
-  occupancy_grid_publisher_->publish(occupancy_grid_msg);
+  if (!map_snapshot) {
+    return;
+  }
+  occupancy_grid_publisher_->publish(
+    Utils::toRosMessage(map_snapshot->occupancy, parameters_->map_frame, stamp));
 }
 
 void Ros2SlamWrapper::publishMapsTimerCallback()
 {
   const rclcpp::Time stamp = this->now();
-  publishOccupancyGrid(slam_system_->getTransformedKeyFrameScans(), stamp);
-  publishGroundMap(stamp);
+  const auto map_snapshot = slam_system_->getLatestGlobalMap();
+  publishOccupancyGrid(map_snapshot, stamp);
+  publishGroundMap(map_snapshot, stamp);
 }
 
-void Ros2SlamWrapper::publishGroundMap(const rclcpp::Time & stamp)
+void Ros2SlamWrapper::publishGroundMap(
+  const std::shared_ptr<const glidar_slam::core::GlobalMapSnapshot> & map_snapshot,
+  const rclcpp::Time & stamp)
 {
   if (
     !parameters_->ground_mapping_enable_texture_mapping &&
@@ -964,13 +985,15 @@ void Ros2SlamWrapper::publishGroundMap(const rclcpp::Time & stamp)
     return;
   }
 
-  const auto ground_clouds = slam_system_->getTransformedGroundClouds();
+  if (!map_snapshot) {
+    return;
+  }
   if (parameters_->ground_mapping_enable_texture_mapping) {
-    if (ground_texture_grid_->buildFromGroundClouds(ground_clouds)) {
+    if (map_snapshot->texture.getInfo().width > 0 && map_snapshot->texture.getInfo().height > 0) {
       ground_texture_image_publisher_->publish(
-        Utils::toRosImage(*ground_texture_grid_, parameters_->map_frame, stamp));
+        Utils::toRosImage(map_snapshot->texture, parameters_->map_frame, stamp));
       ground_texture_coverage_publisher_->publish(
-        Utils::toCoverageMessage(*ground_texture_grid_, parameters_->map_frame, stamp));
+        Utils::toCoverageMessage(map_snapshot->texture, parameters_->map_frame, stamp));
     } else {
       sensor_msgs::msg::Image empty_image;
       empty_image.header.stamp = stamp;
@@ -987,9 +1010,9 @@ void Ros2SlamWrapper::publishGroundMap(const rclcpp::Time & stamp)
 
   if (
     parameters_->ground_mapping_enable_ground_marking_mapping &&
-    ground_marking_grid_->buildFromGroundClouds(ground_clouds)) {
+    map_snapshot->marking.getInfo().width > 0 && map_snapshot->marking.getInfo().height > 0) {
     ground_marking_grid_publisher_->publish(
-      Utils::toRosMessage(*ground_marking_grid_, parameters_->map_frame, stamp));
+      Utils::toRosMessage(map_snapshot->marking, parameters_->map_frame, stamp));
   }
 }
 

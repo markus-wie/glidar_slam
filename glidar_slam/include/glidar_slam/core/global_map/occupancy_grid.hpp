@@ -24,6 +24,12 @@ public:
     return data_;
   }
 
+  void setGrid(const Info & info, std::vector<int8_t> data)
+  {
+    setInfo(info);
+    data_ = std::move(data);
+  }
+
 private:
   std::vector<int8_t> data_;
 

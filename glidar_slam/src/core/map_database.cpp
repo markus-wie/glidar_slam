@@ -130,14 +130,20 @@ void MapDatabase::addKeyFrame(std::shared_ptr<KeyFrame> keyframe)
   }
 }
 
-void MapDatabase::updatePoses(
+std::vector<std::shared_ptr<const KeyFrame>> MapDatabase::updatePoses(
   const gtsam::Values & optimized_values,
   const std::unordered_map<uint64_t, gtsam::Matrix66> & optimized_covariances)
 {
   std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+  std::vector<std::shared_ptr<const KeyFrame>> changed;
   for (const std::shared_ptr<KeyFrame> & keyframe : keyframes_) {
     if (optimized_values.exists(keyframe->key)) {
-      keyframe->pose = optimized_values.at<gtsam::Pose3>(keyframe->key);
+      const gtsam::Pose3 optimized_pose = optimized_values.at<gtsam::Pose3>(keyframe->key);
+      if (!keyframe->pose.matrix().isApprox(optimized_pose.matrix(), 1e-12)) {
+        keyframe->pose = optimized_pose;
+        ++keyframe->revision;
+        changed.push_back(keyframe);
+      }
     }
     const auto covariance = optimized_covariances.find(keyframe->key);
     if (covariance != optimized_covariances.end()) {
@@ -145,6 +151,29 @@ void MapDatabase::updatePoses(
     }
   }
   rebuildSpatialIndex();
+  return changed;
+}
+
+std::shared_ptr<const KeyFrame> MapDatabase::getSnapshot(uint64_t key) const
+{
+  std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+  for (const auto & keyframe : keyframes_) {
+    if (keyframe->key == key) {
+      return keyframe;
+    }
+  }
+  return {};
+}
+
+std::vector<std::shared_ptr<const KeyFrame>> MapDatabase::getSnapshots() const
+{
+  std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+  std::vector<std::shared_ptr<const KeyFrame>> snapshots;
+  snapshots.reserve(keyframes_.size());
+  for (const auto & keyframe : keyframes_) {
+    snapshots.push_back(keyframe);
+  }
+  return snapshots;
 }
 
 std::vector<std::shared_ptr<const KeyFrame>> MapDatabase::getNearbyKeyFrames(

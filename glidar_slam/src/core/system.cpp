@@ -35,8 +35,21 @@ gtsam::Pose3 initialPoseFromGroundObservation(
   }
 
   const Eigen::Vector3d normal_in_base = observation->normal_in_base.cast<double>().normalized();
-  const Eigen::Quaterniond map_from_base =
-    Eigen::Quaterniond::FromTwoVectors(normal_in_base, Eigen::Vector3d::UnitZ());
+  const Eigen::Vector3d target_normal = Eigen::Vector3d::UnitZ();
+  const double alignment = normal_in_base.dot(target_normal);
+  Eigen::Quaterniond map_from_base;
+  if (alignment < -1.0 + 1e-12) {
+    Eigen::Vector3d axis = normal_in_base.cross(Eigen::Vector3d::UnitX());
+    if (axis.squaredNorm() < 1e-12) {
+      axis = normal_in_base.cross(Eigen::Vector3d::UnitY());
+    }
+    map_from_base = Eigen::Quaterniond(0.0, axis.x(), axis.y(), axis.z()).normalized();
+  } else {
+    const Eigen::Vector3d rotation_axis = normal_in_base.cross(target_normal);
+    map_from_base =
+      Eigen::Quaterniond(1.0 + alignment, rotation_axis.x(), rotation_axis.y(), rotation_axis.z())
+        .normalized();
+  }
   return gtsam::Pose3(
     gtsam::Rot3::Quaternion(
       map_from_base.w(), map_from_base.x(), map_from_base.y(), map_from_base.z()),
@@ -65,10 +78,13 @@ SlamSystem::SlamSystem(const std::shared_ptr<Parameters> & parameters) : paramet
   ground_marking_matcher_ = std::make_unique<GroundMarkingMatcher>(parameters_);
   loop_closure_detector_ = std::make_unique<LoopClosureDetector>(parameters_, map_database_);
   loop_closure_detector_->start();
+  map_builder_ = std::make_unique<MapBuilder>(parameters_);
+  map_builder_->start();
 }
 
 SlamSystem::~SlamSystem()
 {
+  map_builder_->stop();
   loop_closure_detector_->stop();
 }
 
@@ -116,7 +132,15 @@ bool SlamSystem::process(
     auto new_keyframe = std::make_shared<KeyFrame>(
       map_database_->incrementNextKey(), timestamp, initial_pose, latest_odom_pose, laser_scan,
       std::nullopt, ground_observation);
+    auto local_map = buildLocalOccupancy(laser_scan->points(), parameters_->occ_map_resolution);
+    if (ground_observation) {
+      addLocalGroundMap(local_map, ground_observation->ground_cloud, *parameters_);
+    }
+    new_keyframe->local_map =
+      std::make_shared<const global_map::LocalMapData>(std::move(local_map));
+    const uint64_t initial_key = new_keyframe->key;
     map_database_->addKeyFrame(new_keyframe);
+    map_builder_->submit(map_database_->getSnapshot(initial_key));
 
     SAM_INFO("System initialized with first keyframe at timestamp: {}", timestamp);
   }
@@ -332,7 +356,14 @@ bool SlamSystem::process(
     next_keyframe_key, timestamp, optimized_pose, latest_odom_pose, laser_scan,
     optimized_covariance, ground_observation);
 
+  auto local_map = buildLocalOccupancy(laser_scan->points(), parameters_->occ_map_resolution);
+  if (ground_observation) {
+    addLocalGroundMap(local_map, ground_observation->ground_cloud, *parameters_);
+  }
+  new_keyframe->local_map = std::make_shared<const global_map::LocalMapData>(std::move(local_map));
+
   map_database_->addKeyFrame(new_keyframe);
+  map_builder_->submit(map_database_->getSnapshot(next_keyframe_key));
 
   std::unordered_map<uint64_t, gtsam::Matrix66> optimized_covariances;
   if (loop_closure_optimization_pending_) {
@@ -342,7 +373,12 @@ bool SlamSystem::process(
       }
     }
   }
-  map_database_->updatePoses(updated_states, optimized_covariances);
+  for (const auto & snapshot : map_database_->updatePoses(updated_states, optimized_covariances)) {
+    map_builder_->submit(snapshot);
+  }
+  if (loop_closure_optimization_pending_) {
+    map_builder_->rebuild(map_database_->getSnapshots());
+  }
   loop_closure_optimization_pending_ = false;
 
   {
@@ -376,6 +412,11 @@ std::optional<gtsam::Pose3> SlamSystem::getLatestPose() const
 {
   std::lock_guard<std::mutex> lock(latest_output_mutex_);
   return latest_pose_;
+}
+
+std::shared_ptr<const GlobalMapSnapshot> SlamSystem::getLatestGlobalMap() const
+{
+  return map_builder_->getLatest();
 }
 
 std::optional<CsmResult::DebugImage> SlamSystem::getLatestLowResDebug() const

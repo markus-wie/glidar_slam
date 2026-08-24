@@ -23,7 +23,7 @@ glidar_slam:
     odom_covariance_diagonal: [0.1, 0.1, 1.0e-6, 1.0e-6, 1.0e-6, 0.05]
 
     # General Parameters
-    minimum_travel_distance: 0.4
+    minimum_travel_distance: 0.5
     minimum_travel_heading: 0.4
     # Timing diagnostics for the SLAM pipeline and loop-closure worker.
     debug_timings: true
@@ -67,6 +67,11 @@ glidar_slam:
     ground_map_padding: 2
     # Adaptive-threshold pixels at or above this value are treated as white markings.
     ground_marking_white_threshold: 200
+    ground_marking_log_odds_hit: 0.8
+    ground_marking_log_odds_miss: 0.35
+    ground_marking_log_odds_cap: 15.0
+
+    # Ground matching settings
     ground_matching_enable: false
     ground_matching_minimum_marking_count: 20
     ground_matching_minimum_score: 0.5
@@ -98,7 +103,7 @@ glidar_slam:
     loop_maximum_consistency_error: 0.5
     
     #### Correlative Scan Matcher Parameters
-    csm_debug_enable: true
+    csm_debug_enable: false
     csm_smear_deviation: 0.1
     # Uses a linear-time Euclidean distance transform instead of point-wise Gaussian splatting.
     csm_use_distance_transform: false

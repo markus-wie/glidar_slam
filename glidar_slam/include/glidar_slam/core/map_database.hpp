@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "glidar_slam/core/key_frame.hpp"
+#include "glidar_slam/core/map_builder.hpp"
 
 namespace glidar_slam::core {
 
@@ -19,9 +20,12 @@ public:
 
   void addKeyFrame(std::shared_ptr<KeyFrame> keyframe);
 
-  void updatePoses(
+  std::vector<std::shared_ptr<const KeyFrame>> updatePoses(
     const gtsam::Values & optimized_values,
     const std::unordered_map<uint64_t, gtsam::Matrix66> & optimized_covariances = {});
+
+  std::shared_ptr<const KeyFrame> getSnapshot(uint64_t key) const;
+  std::vector<std::shared_ptr<const KeyFrame>> getSnapshots() const;
 
   std::vector<std::shared_ptr<const KeyFrame>> getNearbyKeyFrames(
     const gtsam::Pose3 & query_pose, double radius) const;
@@ -44,7 +48,6 @@ private:
   mutable std::shared_mutex rw_mutex_;
 
   std::vector<std::shared_ptr<KeyFrame>> keyframes_;
-
   std::unique_ptr<SpatialIndex> spatial_index_;
 
   std::atomic<uint64_t> next_keyframe_key_{0};

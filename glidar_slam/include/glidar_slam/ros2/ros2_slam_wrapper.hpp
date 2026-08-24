@@ -9,9 +9,6 @@
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
-#include "glidar_slam/core/global_map/ground_marking_grid.hpp"
-#include "glidar_slam/core/global_map/ground_texture_grid.hpp"
-#include "glidar_slam/core/global_map/occupancy_grid.hpp"
 #include "glidar_slam/core/parameters.hpp"
 #include "glidar_slam/core/system.hpp"
 #include "gtsam/geometry/Pose3.h"
@@ -37,9 +34,6 @@ using glidar_slam::core::KeyFrame;
 using glidar_slam::core::Parameters;
 using glidar_slam::core::PointCloudXYZ;
 using glidar_slam::core::SlamSystem;
-using glidar_slam::core::global_map::GroundMarkingGrid;
-using glidar_slam::core::global_map::GroundTextureGrid;
-using glidar_slam::core::global_map::OccupancyGrid;
 
 constexpr double kUnknownOdometryVariance = 1e6;
 
@@ -62,9 +56,11 @@ private:
   void publishMapToOdom();
   void publishMapsTimerCallback();
   void publishOccupancyGrid(
-    const std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> & scans_transformed,
+    const std::shared_ptr<const glidar_slam::core::GlobalMapSnapshot> & snapshot,
     const rclcpp::Time & stamp);
-  void publishGroundMap(const rclcpp::Time & stamp);
+  void publishGroundMap(
+    const std::shared_ptr<const glidar_slam::core::GlobalMapSnapshot> & snapshot,
+    const rclcpp::Time & stamp);
   void publishGroundDebug(
     const glidar_slam::core::GroundPlaneObservation & observation,
     const rclcpp::Time & stamp) const;
@@ -122,9 +118,6 @@ private:
 
   // Modules
   std::unique_ptr<SlamSystem> slam_system_;
-  std::unique_ptr<OccupancyGrid> occ_grid_;
-  std::unique_ptr<GroundMarkingGrid> ground_marking_grid_;
-  std::unique_ptr<GroundTextureGrid> ground_texture_grid_;
 
   // ROS2 interfaces
   // TF2

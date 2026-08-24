@@ -30,6 +30,12 @@ public:
     return info_;
   }
 
+protected:
+  void setInfo(const Info & info)
+  {
+    info_ = info;
+  }
+
 private:
   Info info_;
 };

@@ -5,6 +5,7 @@
 #include <optional>
 #include <utility>
 
+#include "glidar_slam/core/global_map/map_data.hpp"
 #include "glidar_slam/core/ground_plane_extractor.hpp"
 #include "glidar_slam/core/laser_scan.hpp"
 #include "glidar_slam/core/types.hpp"
@@ -20,14 +21,16 @@ public:
   KeyFrame(
     uint64_t key, double timestamp, const gtsam::Pose3 & pose, const gtsam::Pose3 & odom_pose,
     std::shared_ptr<const LaserScan> scan, std::optional<gtsam::Matrix66> covariance = std::nullopt,
-    std::optional<GroundPlaneObservation> ground_observation = std::nullopt)
+    std::optional<GroundPlaneObservation> ground_observation = std::nullopt, uint64_t revision = 0)
   : key(key),
+    revision(revision),
     timestamp(timestamp),
     pose(pose),
     odom_pose(odom_pose),
     covariance(std::move(covariance)),
     scan(std::move(scan)),
-    ground_observation(std::move(ground_observation))
+    ground_observation(std::move(ground_observation)),
+    local_map(std::make_shared<const global_map::LocalMapData>())
   {
   }
 
@@ -40,6 +43,7 @@ public:
   KeyFrame & operator=(KeyFrame && ref) noexcept = default;
 
   uint64_t key{0};
+  uint64_t revision{0};
   double timestamp{0.0};
   gtsam::Pose3 pose;
   gtsam::Pose3 odom_pose;
@@ -48,6 +52,7 @@ public:
 
   std::shared_ptr<const LaserScan> scan;
   std::optional<GroundPlaneObservation> ground_observation;
+  std::shared_ptr<const global_map::LocalMapData> local_map;
 };
 
 }  // namespace glidar_slam::core

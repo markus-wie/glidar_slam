@@ -33,6 +33,7 @@ add_library(${PROJECT_NAME}_core SHARED
   src/core/ground_plane_factor.cpp
   src/core/global_map/ground_marking_grid.cpp
   src/core/global_map/ground_texture_grid.cpp
+  src/core/map_builder.cpp
   src/core/loop_closure.cpp
   src/core/system.cpp
   src/core/global_map/occupancy_grid.cpp

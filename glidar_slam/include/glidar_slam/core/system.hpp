@@ -14,6 +14,7 @@
 #include "glidar_slam/core/ground_plane_extractor.hpp"
 #include "glidar_slam/core/key_frame.hpp"
 #include "glidar_slam/core/loop_closure.hpp"
+#include "glidar_slam/core/map_builder.hpp"
 #include "glidar_slam/core/map_database.hpp"
 #include "glidar_slam/core/parameters.hpp"
 #include "glidar_slam/core/sensor_data.hpp"
@@ -45,6 +46,7 @@ public:
   std::vector<std::pair<uint64_t, uint64_t>> getLoopClosures() const;
 
   gtsam::Pose3 getMapToOdom() const;
+  std::shared_ptr<const GlobalMapSnapshot> getLatestGlobalMap() const;
 
 private:
   static gtsam::Pose3 projectPlanar(const gtsam::Pose3 & pose);
@@ -72,6 +74,7 @@ private:
   std::unique_ptr<GroundMarkingMatcher> ground_marking_matcher_;
   std::unique_ptr<GraphOptimizer> graph_optimizer_;
   std::unique_ptr<LoopClosureDetector> loop_closure_detector_;
+  std::unique_ptr<MapBuilder> map_builder_;
 
   gtsam::Pose3 latest_map_to_odom_;
   mutable std::mutex latest_map_to_odom_mutex_;

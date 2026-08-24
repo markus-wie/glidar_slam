@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "glidar_slam/core/global_map.hpp"
@@ -19,6 +20,12 @@ public:
   const std::vector<int8_t> & getData() const
   {
     return data_;
+  }
+
+  void setGrid(const Info & info, std::vector<int8_t> data)
+  {
+    setInfo(info);
+    data_ = std::move(data);
   }
 
 private:
