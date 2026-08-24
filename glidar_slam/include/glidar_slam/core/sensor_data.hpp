@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include "glidar_slam/core/camera_model.hpp"
 #include "glidar_slam/core/laser_scan.hpp"
 #include "opencv2/core/mat.hpp"

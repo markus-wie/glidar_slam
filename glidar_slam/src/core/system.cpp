@@ -1,6 +1,7 @@
 #include "glidar_slam/core/system.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 #include "glidar_slam/core/correlative_scan_matcher.hpp"
@@ -10,6 +11,16 @@
 #include "pcl/common/transforms.h"
 
 namespace glidar_slam::core {
+
+namespace {
+
+double elapsedMilliseconds(const std::chrono::steady_clock::time_point & start)
+{
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+    .count();
+}
+
+}  // namespace
 
 SlamSystem::SlamSystem(const std::shared_ptr<Parameters> & parameters) : parameters_(parameters)
 {
@@ -29,6 +40,14 @@ bool SlamSystem::process(
   double timestamp, const SensorData & sensor_data, const gtsam::Pose3 & odom_pose,
   const gtsam::Matrix66 & odom_covariance)
 {
+  const auto process_start = std::chrono::steady_clock::now();
+  double ground_extraction_ms = 0;
+  double loop_proposals_ms = 0;
+  double submap_ms = 0;
+  double csm_ms = 0;
+  double optimization_ms = 0;
+  double loop_dispatch_ms = 0;
+
   const std::shared_ptr<const LaserScan> & laser_scan = sensor_data.laserScan();
   if (laser_scan->empty()) {
     return false;
@@ -36,12 +55,20 @@ bool SlamSystem::process(
 
   std::optional<GroundPlaneObservation> ground_observation;
   if (sensor_data.hasVisualData()) {
+    const auto start = std::chrono::steady_clock::now();
     ground_observation = GroundPlaneExtractor::extract(
       sensor_data.image(), sensor_data.depth(), sensor_data.cameraModel().intrinsics(),
       sensor_data.cameraModel().baseFromCamera(), *parameters_);
+    if (parameters_->debug_timings) {
+      ground_extraction_ms = elapsedMilliseconds(start);
+    }
   }
 
+  const auto loop_proposals_start = std::chrono::steady_clock::now();
   processLoopClosureProposals();
+  if (parameters_->debug_timings) {
+    loop_proposals_ms = elapsedMilliseconds(loop_proposals_start);
+  }
 
   const gtsam::Pose3 latest_odom_pose = projectPlanar(odom_pose);
 
@@ -74,6 +101,7 @@ bool SlamSystem::process(
 
   // Construct the Submap Reference Scan
   // Aggregate the points of the last N keyframes transformed into the world frame
+  const auto submap_start = std::chrono::steady_clock::now();
   std::vector<Point2D> reference_points;
 
   std::vector<std::shared_ptr<const KeyFrame>> keyframes = map_database_->getAllKeyFrames();
@@ -88,11 +116,18 @@ bool SlamSystem::process(
     const KeyFrame & kf = *keyframes.at(i);
     appendVisiblePoints(kf.scan->points(), kf.pose, viewpoint, reference_points);
   }
+  if (parameters_->debug_timings) {
+    submap_ms = elapsedMilliseconds(submap_start);
+  }
 
   // Execute the Correlative Scan Matcher
   // This yields an optimized world pose and a 3x3 covariance matrix
+  const auto csm_start = std::chrono::steady_clock::now();
   const CsmResult csm_result =
     scan_matcher_->match(reference_points, laser_scan->points2D(), Utils::toPose2D(current_guess));
+  if (parameters_->debug_timings) {
+    csm_ms = elapsedMilliseconds(csm_start);
+  }
 
   {
     std::lock_guard<std::mutex> lock(latest_output_mutex_);
@@ -177,7 +212,11 @@ bool SlamSystem::process(
     }
   }
 
+  const auto optimization_start = std::chrono::steady_clock::now();
   gtsam::Values updated_states = graph_optimizer_->optimize();
+  if (parameters_->debug_timings) {
+    optimization_ms = elapsedMilliseconds(optimization_start);
+  }
 
   gtsam::Pose3 optimized_pose = graph_optimizer_->getLatestPose();
 
@@ -205,11 +244,23 @@ bool SlamSystem::process(
     latest_map_to_odom_ = optimized_pose.compose(odom_to_base);
   }
 
+  const auto loop_dispatch_start = std::chrono::steady_clock::now();
   dispatchFindLoopClosure(*new_keyframe);
+  if (parameters_->debug_timings) {
+    loop_dispatch_ms = elapsedMilliseconds(loop_dispatch_start);
+  }
 
   {
     std::lock_guard<std::mutex> lock(latest_output_mutex_);
     latest_pose_ = optimized_pose;
+  }
+
+  if (parameters_->debug_timings) {
+    SAM_INFO(
+      "SLAM timing [ms]: ground_extraction={}, loop_proposals={}, submap={}, "
+      "csm={}, optimization={}, loop_dispatch={}, total={}",
+      ground_extraction_ms, loop_proposals_ms, submap_ms, csm_ms, optimization_ms, loop_dispatch_ms,
+      elapsedMilliseconds(process_start));
   }
   return true;
 }

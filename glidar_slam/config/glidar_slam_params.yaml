@@ -25,6 +25,8 @@ glidar_slam:
     # General Parameters
     minimum_travel_distance: 0.4
     minimum_travel_heading: 0.4
+    # Timing diagnostics for the SLAM pipeline and loop-closure worker.
+    debug_timings: false
 
     # Occupancy Grid Parameters
     occ_map_resolution: 0.05

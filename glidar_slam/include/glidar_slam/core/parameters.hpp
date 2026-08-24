@@ -91,6 +91,7 @@ struct Parameters
   double loop_minimum_xy_variance{0.01};
   double loop_minimum_score{0.5};
   double loop_maximum_consistency_error{0.5};
+  bool debug_timings{false};
 
   // iSAM2 Parameters
   double isam_relinearizeThreshold{0.1};
@@ -174,6 +175,7 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  loop_minimum_xy_variance: " << p.loop_minimum_xy_variance << ",\n"
      << "  loop_minimum_score: " << p.loop_minimum_score << ",\n"
      << "  loop_maximum_consistency_error: " << p.loop_maximum_consistency_error << ",\n"
+     << "  debug_timings: " << (p.debug_timings ? "true" : "false") << ",\n"
      << "  isam_relinearizeThreshold: " << p.isam_relinearizeThreshold << ",\n"
      << "  isam_relinearizeSkip: " << p.isam_relinearizeSkip << "\n"
      << "}";

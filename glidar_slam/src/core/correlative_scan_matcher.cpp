@@ -1,6 +1,7 @@
 #include "glidar_slam/core/correlative_scan_matcher.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -50,6 +51,7 @@ CsmResult CorrelativeScanMatcher::match(
   const std::vector<Point2D> & reference_points, const std::vector<Point2D> & current_points,
   const Pose2D & pose_estimate) const
 {
+  const auto timing_start = std::chrono::steady_clock::now();
   CsmResult result{};
   result.optimized_pose = pose_estimate;
   result.score = 0.0;
@@ -70,9 +72,22 @@ CsmResult CorrelativeScanMatcher::match(
   for (const auto & stage : stages) {
     fields.push_back(buildField(reference_points, stage.field_resolution));
   }
+  if (params_->debug_timings) {
+    const double elapsed_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - timing_start)
+        .count();
+    SAM_INFO("CSM timing: field construction={} ms", elapsed_ms);
+  }
 
+  const auto initial_score_start = std::chrono::steady_clock::now();
   const double initial_score = evaluatePose(current_points, fields.front(), pose_estimate);
   Pose2D best_pose = pose_estimate;
+  if (params_->debug_timings) {
+    const double elapsed_ms = std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - initial_score_start)
+                                .count();
+    SAM_INFO("CSM timing: initial score={} ms", elapsed_ms);
+  }
 
   std::vector<SearchResult> results;
   results.reserve(stages.size());
@@ -86,7 +101,14 @@ CsmResult CorrelativeScanMatcher::match(
   for (std::size_t stage_index = 0; stage_index < stages.size(); ++stage_index) {
     const auto & stage = stages[stage_index];
 
+    const auto stage_start = std::chrono::steady_clock::now();
     SearchResult stage_result = searchSpace(current_points, fields[stage_index], best_pose, stage);
+    if (params_->debug_timings) {
+      const double elapsed_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - stage_start)
+          .count();
+      SAM_INFO("CSM timing: search stage {}={} ms", stage_index, elapsed_ms);
+    }
 
     best_pose = stage_result.best_pose;
 
@@ -103,7 +125,14 @@ CsmResult CorrelativeScanMatcher::match(
     }
   }
 
+  const auto covariance_start = std::chrono::steady_clock::now();
   Eigen::Matrix3d cov = computeCovariance(results, stages);
+  if (params_->debug_timings) {
+    const double elapsed_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - covariance_start)
+        .count();
+    SAM_INFO("CSM timing: covariance={} ms", elapsed_ms);
+  }
 
   if (params_->csm_debug_enable) {
     SAM_INFO(
@@ -116,8 +145,20 @@ CsmResult CorrelativeScanMatcher::match(
   result.optimized_pose = best_pose;
   result.score = results.back().best_score;
   result.covariance = cov;
-  result.low_res_debug = CsmResult::toDebugImage(fields.front());
-  result.high_res_debug = CsmResult::toDebugImage(fields.back());
+  const auto debug_image_start = std::chrono::steady_clock::now();
+  if (params_->csm_debug_enable) {
+    result.low_res_debug = CsmResult::toDebugImage(fields.front());
+    result.high_res_debug = CsmResult::toDebugImage(fields.back());
+  }
+  if (params_->debug_timings) {
+    const double image_elapsed_ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - debug_image_start)
+                                      .count();
+    const double total_elapsed_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - timing_start)
+        .count();
+    SAM_INFO("CSM timing: debug images={} ms, total={} ms", image_elapsed_ms, total_elapsed_ms);
+  }
   return result;
 }
 

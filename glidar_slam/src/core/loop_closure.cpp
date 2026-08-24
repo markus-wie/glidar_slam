@@ -1,5 +1,6 @@
 #include "glidar_slam/core/loop_closure.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
@@ -245,7 +246,17 @@ void LoopClosureDetector::run()
       input_queue_.pop_front();
     }
 
+    const auto search_start = std::chrono::steady_clock::now();
+
     std::vector<LoopClosureProposal> proposals = findClosures(query);
+    if (parameters_->debug_timings) {
+      const double elapsed_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - search_start)
+          .count();
+      SAM_INFO(
+        "Loop closure timing [ms]: query_key={}, search={}, proposals={}", query.key, elapsed_ms,
+        proposals.size());
+    }
 
     {
       std::lock_guard<std::mutex> lock(mutex_);

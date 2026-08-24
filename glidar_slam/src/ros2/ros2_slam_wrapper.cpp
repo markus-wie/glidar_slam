@@ -1,6 +1,7 @@
 #include "glidar_slam/ros2/ros2_slam_wrapper.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -141,6 +142,7 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   parameters_->loop_minimum_score = this->declare_parameter<double>("loop_minimum_score", 0.5);
   parameters_->loop_maximum_consistency_error =
     this->declare_parameter<double>("loop_maximum_consistency_error", 0.5);
+  parameters_->debug_timings = this->declare_parameter<bool>("debug_timings", false);
 
   processCSMParameters();
 
@@ -367,6 +369,8 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.loop_minimum_score = parameter.as_double();
     } else if (name == "loop_maximum_consistency_error") {
       updated.loop_maximum_consistency_error = parameter.as_double();
+    } else if (name == "debug_timings") {
+      updated.debug_timings = parameter.as_bool();
     } else if (name == "csm_debug_enable") {
       updated.csm_debug_enable = parameter.as_bool();
     } else if (name == "csm_smear_deviation") {
@@ -509,6 +513,8 @@ void Ros2SlamWrapper::ScanRGBDCallback(
   const std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> scans_transformed =
     slam_system_->getTransformedKeyFrameScans();
 
+  const auto publish_start = std::chrono::steady_clock::now();
+
   std::vector<std::shared_ptr<const KeyFrame>> keyframes = slam_system_->getKeyFrames();
 
   publishGraph(keyframes);
@@ -527,6 +533,16 @@ void Ros2SlamWrapper::ScanRGBDCallback(
       camera_info_msg->k[0], camera_info_msg->k[4], camera_info_msg->k[2], camera_info_msg->k[5]};
     publishGroundDebugImage(*observation, cv_ptr_color->image, intrinsics, base_from_camera_eigen);
     publishGroundDebug(*observation, color_msg->header.stamp);
+  }
+
+  const double elapsed_ms =
+    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - publish_start)
+      .count();
+
+  if (parameters_->debug_timings) {
+    RCLCPP_INFO(
+      this->get_logger(), "Publishing graph, occupancy grid, and ground map took %.2f ms",
+      elapsed_ms);
   }
 }
 
