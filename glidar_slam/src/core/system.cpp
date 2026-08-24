@@ -86,6 +86,7 @@ bool SlamSystem::process(
 
   const std::shared_ptr<const LaserScan> & laser_scan = sensor_data.laserScan();
   if (laser_scan->empty()) {
+    SAM_WARN("Empty laser scan received. Did not run the system!");
     return false;
   }
 
@@ -131,7 +132,7 @@ bool SlamSystem::process(
   if (!shouldCreateKeyFrame(latest_odom_pose)) {
     std::lock_guard<std::mutex> lock(latest_output_mutex_);
     latest_pose_ = current_guess;
-    return true;
+    return false;
   }
 
   uint64_t next_keyframe_key = map_database_->incrementNextKey();

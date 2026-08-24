@@ -41,6 +41,8 @@ using glidar_slam::core::global_map::GroundMarkingGrid;
 using glidar_slam::core::global_map::GroundTextureGrid;
 using glidar_slam::core::global_map::OccupancyGrid;
 
+constexpr double kUnknownOdometryVariance = 1e6;
+
 class Ros2SlamWrapper : public rclcpp::Node
 {
 public:
@@ -54,15 +56,11 @@ private:
     const sensor_msgs::msg::Image::ConstSharedPtr & depth_msg,
     const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg);
 
-  static geometry_msgs::msg::TransformStamped poseToTransformStamped(
-    const gtsam::Pose3 & map_to_odom, const std::string & parent_frame,
-    const std::string & child_frame, const rclcpp::Time & stamp);
-  static geometry_msgs::msg::PoseStamped poseToPoseStamped(
-    const gtsam::Pose3 & pose, const std::string & frame, const rclcpp::Time & stamp);
   void publishGraph(
     const std::vector<std::shared_ptr<const KeyFrame>> & keyframes,
     const std::vector<std::pair<uint64_t, uint64_t>> & loop_closures);
   void publishMapToOdom();
+  void publishMapsTimerCallback();
   void publishOccupancyGrid(
     const std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> & scans_transformed,
     const rclcpp::Time & stamp);
@@ -71,7 +69,6 @@ private:
     const glidar_slam::core::GroundPlaneObservation & observation,
     const rclcpp::Time & stamp) const;
   void publishGroundMatchingDebug(const rclcpp::Time & stamp);
-  void clearGroundDebug(const rclcpp::Time & stamp) const;
   void publishGroundDebugImage(
     const glidar_slam::core::GroundPlaneObservation & observation, const cv::Mat & color,
     const glidar_slam::core::CameraIntrinsics & intrinsics,
@@ -89,12 +86,13 @@ private:
 
   void processCSMParameters();
 
+  static geometry_msgs::msg::TransformStamped poseToTransformStamped(
+    const gtsam::Pose3 & map_to_odom, const std::string & parent_frame,
+    const std::string & child_frame, const rclcpp::Time & stamp);
+
   static sensor_msgs::msg::Image toHeatmapRosImage(
     const glidar_slam::core::CsmResult::DebugImage & debug, const std::string & frame_id,
     const rclcpp::Time & stamp);
-
-  static PointCloudXYZ transformPointCloud(
-    const PointCloudXYZ & input, const geometry_msgs::msg::TransformStamped & transform_stamped);
 
   static bool parseGroundRoiRatios(const std::string & value, std::vector<float> & ratios);
 
@@ -106,13 +104,21 @@ private:
     const glidar_slam::core::GroundPlaneObservation & observation, const std::string & frame,
     const rclcpp::Time & stamp);
 
-  static visualization_msgs::msg::Marker makeGroundDeleteMarker(int id, const std::string & frame);
-
   static sensor_msgs::msg::Image::UniquePtr makeGroundDebugImage(
     const cv::Mat & color, const glidar_slam::core::CameraIntrinsics & intrinsics,
     const Eigen::Affine3f & base_from_camera, const std::vector<float> & roi_ratios,
     const glidar_slam::core::GroundPlaneObservation & observation, const rclcpp::Time & stamp,
     const std::string & frame);
+
+  static visualization_msgs::msg::Marker loopClosuresToMarker(
+    const std::vector<std::shared_ptr<const KeyFrame>> & keyframes,
+    const std::vector<std::pair<uint64_t, uint64_t>> & loop_closures, const std::string & frame);
+
+  static std::optional<visualization_msgs::msg::Marker> keyframeCovarianceToMarker(
+    const KeyFrame & keyframe, const std::string & frame);
+
+  static visualization_msgs::msg::Marker keyframeToMarker(
+    const KeyFrame & keyframe, const std::string & frame);
 
   // Modules
   std::unique_ptr<SlamSystem> slam_system_;
@@ -131,6 +137,7 @@ private:
   rclcpp::CallbackGroup::SharedPtr odom_callback_group_;
   rclcpp::CallbackGroup::SharedPtr scan_callback_group_;
   rclcpp::CallbackGroup::SharedPtr camera_callback_group_;
+  rclcpp::CallbackGroup::SharedPtr map_callback_group_;
 
   // Subscribers
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_subscriber_;
@@ -151,6 +158,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr ground_texture_image_publisher_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr ground_texture_coverage_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_debug_cloud_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_initial_debug_cloud_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_matching_debug_publisher_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr ground_debug_marker_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr ground_debug_image_publisher_;
@@ -158,6 +166,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr csm_debug_high_publisher_;
 
   rclcpp::TimerBase::SharedPtr transform_broadcast_timer_;
+  rclcpp::TimerBase::SharedPtr map_timer_;
 
   // Variables
   gtsam::Matrix66 latest_odom_covariance_;

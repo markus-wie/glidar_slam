@@ -38,25 +38,6 @@ using glidar_slam::core::global_map::GroundMarkingGrid;
 using glidar_slam::core::global_map::GroundTextureGrid;
 using glidar_slam::core::global_map::OccupancyGrid;
 
-namespace {
-
-constexpr double kUnknownOdometryVariance = 1e6;
-
-bool validOdometryCovarianceParameter(const std::vector<double> & covariance)
-{
-  return covariance.size() == 6 &&
-         std::all_of(covariance.begin(), covariance.end(), [](double value) {
-           return value == -1.0 || (std::isfinite(value) && value > 0.0);
-         });
-}
-
-double sanitizeOdometryVariance(double variance)
-{
-  return std::isfinite(variance) && variance > 0.0 ? variance : kUnknownOdometryVariance;
-}
-
-}  // namespace
-
 Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("glidar_slam", options)
 {
   parameters_ = std::make_shared<Parameters>();
@@ -92,9 +73,8 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
 
   parameters_->odom_covariance_diagonal = this->declare_parameter<std::vector<double>>(
     "odom_covariance_diagonal", std::vector<double>{-1.0, -1.0, -1.0, -1.0, -1.0, -1.0});
-  if (!validOdometryCovarianceParameter(parameters_->odom_covariance_diagonal)) {
-    throw std::runtime_error(
-      "odom_covariance_diagonal must contain six values that are -1 or finite and positive");
+  if (parameters_->odom_covariance_diagonal.size() != 6) {
+    throw std::runtime_error("odom_covariance_diagonal must contain six values");
   }
 
   parameters_->minimum_travel_distance =
@@ -218,6 +198,7 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   odom_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   camera_callback_group_ =
     this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  map_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   transform_broadcast_callback_group_ =
     this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
@@ -263,6 +244,8 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     parameters_->ground_texture_coverage_topic, 10);
   ground_debug_cloud_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
     parameters_->ground_debug_cloud_topic, 10);
+  ground_initial_debug_cloud_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+    "glidar_slam/debug/ground_initial_inliers", 10);
   ground_matching_debug_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
     parameters_->ground_matching_debug_topic, 10);
   ground_debug_marker_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
@@ -278,6 +261,9 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   transform_broadcast_timer_ = this->create_wall_timer(
     std::chrono::milliseconds(100), std::bind(&Ros2SlamWrapper::publishMapToOdom, this),
     transform_broadcast_callback_group_);
+  map_timer_ = this->create_wall_timer(
+    std::chrono::milliseconds(1000), std::bind(&Ros2SlamWrapper::publishMapsTimerCallback, this),
+    map_callback_group_);
 }
 
 void Ros2SlamWrapper::processCSMParameters()
@@ -368,10 +354,9 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
     const std::string & name = parameter.get_name();
     if (name == "odom_covariance_diagonal") {
       updated.odom_covariance_diagonal = parameter.as_double_array();
-      if (!validOdometryCovarianceParameter(updated.odom_covariance_diagonal)) {
+      if (updated.odom_covariance_diagonal.size() != 6) {
         result.successful = false;
-        result.reason =
-          "odom_covariance_diagonal must contain six values that are -1 or finite and positive";
+        result.reason = "odom_covariance_diagonal must contain six values";
         return result;
       }
     } else if (name == "minimum_travel_distance") {
@@ -605,7 +590,6 @@ void Ros2SlamWrapper::ScanRGBDCallback(
 
   if (!slam_system_->process(
         scan_stamp.seconds(), sensor_data, odom_pose, latest_odom_covariance_)) {
-    RCLCPP_WARN(this->get_logger(), "SLAM system could not process the lidar scan.");
     return;
   }
 
@@ -617,16 +601,11 @@ void Ros2SlamWrapper::ScanRGBDCallback(
     return;
   }
 
-  const std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> scans_transformed =
-    slam_system_->getTransformedKeyFrameScans();
+  std::vector<std::shared_ptr<const KeyFrame>> keyframes = slam_system_->getKeyFrames();
 
   const auto publish_start = std::chrono::steady_clock::now();
 
-  std::vector<std::shared_ptr<const KeyFrame>> keyframes = slam_system_->getKeyFrames();
-
   publishGraph(keyframes, slam_system_->getLoopClosures());
-  publishOccupancyGrid(scans_transformed, rclcpp::Time(scan_msg->header.stamp));
-  publishGroundMap(rclcpp::Time(scan_msg->header.stamp));
   publishDebugImage(rclcpp::Time(scan_msg->header.stamp));
   publishGroundMatchingDebug(rclcpp::Time(scan_msg->header.stamp));
 
@@ -656,6 +635,10 @@ void Ros2SlamWrapper::ScanRGBDCallback(
 
 void Ros2SlamWrapper::odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr & msg)
 {
+  auto sanitizeOdometryVariance = [](double variance) {
+    return std::isfinite(variance) && variance > 0.0 ? variance : kUnknownOdometryVariance;
+  };
+
   latest_odom_covariance_.setZero();
   if (
     std::find(
@@ -689,6 +672,12 @@ void Ros2SlamWrapper::publishGroundDebug(
   cloud_msg.header.stamp = stamp;
   cloud_msg.header.frame_id = parameters_->base_frame;
   ground_debug_cloud_publisher_->publish(cloud_msg);
+
+  sensor_msgs::msg::PointCloud2 initial_cloud_msg;
+  pcl::toROSMsg(observation.pcl, initial_cloud_msg);
+  initial_cloud_msg.header.stamp = stamp;
+  initial_cloud_msg.header.frame_id = parameters_->base_frame;
+  ground_initial_debug_cloud_publisher_->publish(initial_cloud_msg);
 
   visualization_msgs::msg::MarkerArray marker_array;
 
@@ -732,31 +721,6 @@ void Ros2SlamWrapper::publishGroundMatchingDebug(const rclcpp::Time & stamp)
   cloud_msg.header.stamp = stamp;
   cloud_msg.header.frame_id = parameters_->map_frame;
   ground_matching_debug_publisher_->publish(cloud_msg);
-}
-
-void Ros2SlamWrapper::clearGroundDebug(const rclcpp::Time & stamp) const
-{
-  if (!parameters_->ground_debug_enable) {
-    return;
-  }
-
-  pcl::PointCloud<pcl::PointXYZRGB> empty_cloud;
-  sensor_msgs::msg::PointCloud2 cloud_msg;
-  pcl::toROSMsg(empty_cloud, cloud_msg);
-  cloud_msg.header.stamp = stamp;
-  cloud_msg.header.frame_id = parameters_->base_frame;
-  ground_debug_cloud_publisher_->publish(cloud_msg);
-
-  visualization_msgs::msg::MarkerArray marker_array;
-  marker_array.markers.push_back(makeGroundDeleteMarker(0, parameters_->base_frame));
-  marker_array.markers.push_back(makeGroundDeleteMarker(1, parameters_->base_frame));
-  ground_debug_marker_publisher_->publish(marker_array);
-
-  sensor_msgs::msg::Image empty_image;
-  empty_image.header.stamp = stamp;
-  empty_image.header.frame_id = parameters_->base_frame;
-  empty_image.encoding = sensor_msgs::image_encodings::BGR8;
-  ground_debug_image_publisher_->publish(empty_image);
 }
 
 void Ros2SlamWrapper::publishGroundDebugImage(
@@ -809,57 +773,7 @@ void Ros2SlamWrapper::publishGroundDebugImage(
   ground_debug_image_publisher_->publish(std::move(msg));
 }
 
-geometry_msgs::msg::TransformStamped Ros2SlamWrapper::poseToTransformStamped(
-  const gtsam::Pose3 & map_to_odom, const std::string & parent_frame,
-  const std::string & child_frame, const rclcpp::Time & stamp)
-{
-  geometry_msgs::msg::TransformStamped transform;
-  transform.header.stamp = stamp;
-  transform.header.frame_id = parent_frame;
-  transform.child_frame_id = child_frame;
-
-  const auto & translation = map_to_odom.translation();
-  const gtsam::Vector3 rpy = map_to_odom.rotation().rpy();
-
-  transform.transform.translation.x = translation.x();
-  transform.transform.translation.y = translation.y();
-  transform.transform.translation.z = translation.z();
-
-  tf2::Quaternion quaternion;
-  quaternion.setRPY(rpy.x(), rpy.y(), rpy.z());
-  transform.transform.rotation.x = quaternion.x();
-  transform.transform.rotation.y = quaternion.y();
-  transform.transform.rotation.z = quaternion.z();
-  transform.transform.rotation.w = quaternion.w();
-  return transform;
-}
-
-geometry_msgs::msg::PoseStamped Ros2SlamWrapper::poseToPoseStamped(
-  const gtsam::Pose3 & pose, const std::string & frame, const rclcpp::Time & stamp)
-{
-  geometry_msgs::msg::PoseStamped pose_msg;
-  pose_msg.header.stamp = stamp;
-  pose_msg.header.frame_id = frame;
-
-  const auto & translation = pose.translation();
-  const gtsam::Vector3 rpy = pose.rotation().rpy();
-
-  pose_msg.pose.position.x = translation.x();
-  pose_msg.pose.position.y = translation.y();
-  pose_msg.pose.position.z = translation.z();
-
-  tf2::Quaternion quaternion;
-  quaternion.setRPY(rpy.x(), rpy.y(), rpy.z());
-  pose_msg.pose.orientation.x = quaternion.x();
-  pose_msg.pose.orientation.y = quaternion.y();
-  pose_msg.pose.orientation.z = quaternion.z();
-  pose_msg.pose.orientation.w = quaternion.w();
-  return pose_msg;
-}
-
-namespace {
-
-visualization_msgs::msg::Marker keyframeToMarker(
+visualization_msgs::msg::Marker Ros2SlamWrapper::keyframeToMarker(
   const KeyFrame & keyframe, const std::string & frame)
 {
   visualization_msgs::msg::Marker marker;
@@ -896,7 +810,7 @@ visualization_msgs::msg::Marker keyframeToMarker(
   return marker;
 }
 
-std::optional<visualization_msgs::msg::Marker> keyframeCovarianceToMarker(
+std::optional<visualization_msgs::msg::Marker> Ros2SlamWrapper::keyframeCovarianceToMarker(
   const KeyFrame & keyframe, const std::string & frame)
 {
   if (!keyframe.covariance) {
@@ -954,7 +868,7 @@ std::optional<visualization_msgs::msg::Marker> keyframeCovarianceToMarker(
   return marker;
 }
 
-visualization_msgs::msg::Marker loopClosuresToMarker(
+visualization_msgs::msg::Marker Ros2SlamWrapper::loopClosuresToMarker(
   const std::vector<std::shared_ptr<const KeyFrame>> & keyframes,
   const std::vector<std::pair<uint64_t, uint64_t>> & loop_closures, const std::string & frame)
 {
@@ -1002,8 +916,6 @@ visualization_msgs::msg::Marker loopClosuresToMarker(
   return marker;
 }
 
-}  // namespace
-
 void Ros2SlamWrapper::publishGraph(
   const std::vector<std::shared_ptr<const KeyFrame>> & keyframes,
   const std::vector<std::pair<uint64_t, uint64_t>> & loop_closures)
@@ -1035,6 +947,13 @@ void Ros2SlamWrapper::publishOccupancyGrid(
     Utils::toRosMessage(*occ_grid_, parameters_->map_frame, stamp);
 
   occupancy_grid_publisher_->publish(occupancy_grid_msg);
+}
+
+void Ros2SlamWrapper::publishMapsTimerCallback()
+{
+  const rclcpp::Time stamp = this->now();
+  publishOccupancyGrid(slam_system_->getTransformedKeyFrameScans(), stamp);
+  publishGroundMap(stamp);
 }
 
 void Ros2SlamWrapper::publishGroundMap(const rclcpp::Time & stamp)
@@ -1080,6 +999,31 @@ void Ros2SlamWrapper::publishMapToOdom()
   tf_broadcaster_->sendTransform(poseToTransformStamped(
     map_to_odom, parameters_->map_frame, parameters_->odom_frame,
     this->now() + rclcpp::Duration::from_seconds(0.6)));
+}
+
+geometry_msgs::msg::TransformStamped Ros2SlamWrapper::poseToTransformStamped(
+  const gtsam::Pose3 & map_to_odom, const std::string & parent_frame,
+  const std::string & child_frame, const rclcpp::Time & stamp)
+{
+  geometry_msgs::msg::TransformStamped transform;
+  transform.header.stamp = stamp;
+  transform.header.frame_id = parent_frame;
+  transform.child_frame_id = child_frame;
+
+  const auto & translation = map_to_odom.translation();
+  const gtsam::Vector3 rpy = map_to_odom.rotation().rpy();
+
+  transform.transform.translation.x = translation.x();
+  transform.transform.translation.y = translation.y();
+  transform.transform.translation.z = translation.z();
+
+  tf2::Quaternion quaternion;
+  quaternion.setRPY(rpy.x(), rpy.y(), rpy.z());
+  transform.transform.rotation.x = quaternion.x();
+  transform.transform.rotation.y = quaternion.y();
+  transform.transform.rotation.z = quaternion.z();
+  transform.transform.rotation.w = quaternion.w();
+  return transform;
 }
 
 void Ros2SlamWrapper::publishDebugImage(const rclcpp::Time & stamp)
@@ -1132,22 +1076,6 @@ sensor_msgs::msg::Image Ros2SlamWrapper::toHeatmapRosImage(
   cv_image.encoding = "rgb8";
   cv_image.image = rgb;
   return *cv_image.toImageMsg();
-}
-
-PointCloudXYZ Ros2SlamWrapper::transformPointCloud(
-  const PointCloudXYZ & input, const geometry_msgs::msg::TransformStamped & transform_stamped)
-{
-  const auto & t = transform_stamped.transform.translation;
-  const auto & q = transform_stamped.transform.rotation;
-
-  const Eigen::Quaternionf rotation(q.w, q.x, q.y, q.z);
-  const Eigen::Translation3f translation(
-    static_cast<float>(t.x), static_cast<float>(t.y), static_cast<float>(t.z));
-  const Eigen::Affine3f transform = translation * rotation;
-
-  PointCloudXYZ output;
-  pcl::transformPointCloud(input, output, transform);
-  return output;
 }
 
 bool Ros2SlamWrapper::parseGroundRoiRatios(const std::string & value, std::vector<float> & ratios)
@@ -1254,17 +1182,6 @@ visualization_msgs::msg::Marker Ros2SlamWrapper::makeGroundNormalMarker(
   marker.color.g = 0.1F;
   marker.color.b = 0.1F;
   marker.color.a = 1.0F;
-  return marker;
-}
-
-visualization_msgs::msg::Marker Ros2SlamWrapper::makeGroundDeleteMarker(
-  int id, const std::string & frame)
-{
-  visualization_msgs::msg::Marker marker;
-  marker.header.frame_id = frame;
-  marker.ns = "ground_plane_debug";
-  marker.id = id;
-  marker.action = visualization_msgs::msg::Marker::DELETE;
   return marker;
 }
 
