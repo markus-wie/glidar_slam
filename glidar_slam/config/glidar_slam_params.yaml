@@ -103,8 +103,10 @@ glidar_slam:
     loop_maximum_consistency_error: 0.5
     
     #### Correlative Scan Matcher Parameters
-    csm_debug_enable: false
+    csm_debug_enable: true
     csm_smear_deviation: 0.1
+    # Uses exp(-distance / csm_smear_deviation) instead of a Gaussian kernel.
+    csm_use_laplace_kernel: true
     # Uses a linear-time Euclidean distance transform instead of point-wise Gaussian splatting.
     csm_use_distance_transform: false
     # Uses TBB for parallel candidate evaluation when TBB is available at build time.

@@ -21,7 +21,7 @@ public:
   size_t size() const;
 
   LikelihoodField getLikelihoodField(
-    double resolution, double smear_deviation, bool use_distance_transform,
+    double resolution, double smear_deviation, bool use_distance_transform, bool use_laplace_kernel,
     bool debug_timings = false) const;
 
   struct GridIndex
@@ -54,24 +54,19 @@ public:
   {
     double resolution{0.0};
 
-    // 2048 x 2048 cells = ~100x100 meters at 5cm resolution.
-    static constexpr int BITS = 11;
-    static constexpr int WIDTH = 1 << BITS;
-    static constexpr int MASK = WIDTH - 1;
+    int origin_x{0};
+    int origin_y{0};
+    int width{0};
+    int height{0};
 
-    std::vector<int> counts;              // Fixed size
-    std::vector<int> active_index;        // Fixed size
+    std::vector<int> counts;
+    std::vector<int> active_index;
     std::vector<GridIndex> active_cells;  // Dynamic sparse set
 
-    // Initialize fixed arrays to 0 once at startup
-    HitCountGrid() : counts(WIDTH * WIDTH, 0), active_index(WIDTH * WIDTH, 0)
-    {
-    }
-
-    // O(1) Bitwise Toroidal Indexing
+    // O(1) bounds-relative indexing.
     inline int flatIdx(int x, int y) const
     {
-      return ((y & MASK) << BITS) | (x & MASK);
+      return (y - origin_y) * width + (x - origin_x);
     }
   };
 

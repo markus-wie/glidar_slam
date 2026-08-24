@@ -20,8 +20,64 @@ int cellCoordinate(double value, double resolution)
   return static_cast<int>(std::floor(value / resolution));
 }
 
+void resizeGrid(
+  SubmapGrid::HitCountGrid & grid, int required_min_x, int required_max_x, int required_min_y,
+  int required_max_y)
+{
+  const bool has_storage = grid.width > 0 && grid.height > 0;
+  if (
+    has_storage && required_min_x >= grid.origin_x && required_max_x < grid.origin_x + grid.width &&
+    required_min_y >= grid.origin_y && required_max_y < grid.origin_y + grid.height) {
+    return;
+  }
+
+  int new_min_x = required_min_x;
+  int new_max_x = required_max_x;
+  int new_min_y = required_min_y;
+  int new_max_y = required_max_y;
+
+  if (has_storage) {
+    new_min_x = std::min(new_min_x, grid.origin_x);
+    new_max_x = std::max(new_max_x, grid.origin_x + grid.width - 1);
+    new_min_y = std::min(new_min_y, grid.origin_y);
+    new_max_y = std::max(new_max_y, grid.origin_y + grid.height - 1);
+
+    const int required_width = new_max_x - new_min_x + 1;
+    const int required_height = new_max_y - new_min_y + 1;
+    const int new_width = std::max(required_width, grid.width * 2);
+    const int new_height = std::max(required_height, grid.height * 2);
+    new_min_x = std::min(new_min_x, grid.origin_x - (new_width - grid.width) / 2);
+    new_min_y = std::min(new_min_y, grid.origin_y - (new_height - grid.height) / 2);
+    new_max_x = new_min_x + new_width - 1;
+    new_max_y = new_min_y + new_height - 1;
+  }
+
+  const int new_width = new_max_x - new_min_x + 1;
+  const int new_height = new_max_y - new_min_y + 1;
+  std::vector<int> new_counts(static_cast<std::size_t>(new_width) * new_height, 0);
+  std::vector<int> new_active_index(static_cast<std::size_t>(new_width) * new_height, 0);
+
+  if (has_storage) {
+    for (int y = grid.origin_y; y < grid.origin_y + grid.height; ++y) {
+      const int old_offset = grid.flatIdx(grid.origin_x, y);
+      const int new_offset = (y - new_min_y) * new_width + (grid.origin_x - new_min_x);
+      std::copy_n(grid.counts.begin() + old_offset, grid.width, new_counts.begin() + new_offset);
+      std::copy_n(
+        grid.active_index.begin() + old_offset, grid.width, new_active_index.begin() + new_offset);
+    }
+  }
+
+  grid.origin_x = new_min_x;
+  grid.origin_y = new_min_y;
+  grid.width = new_width;
+  grid.height = new_height;
+  grid.counts = std::move(new_counts);
+  grid.active_index = std::move(new_active_index);
+}
+
 void buildDistanceTransformField(
-  LikelihoodField & field, const SubmapGrid::HitCountGrid & grid, double smear_deviation)
+  LikelihoodField & field, const SubmapGrid::HitCountGrid & grid, double smear_deviation,
+  bool use_laplace_kernel)
 {
   const int width = field.width;
   const int height = field.height;
@@ -44,7 +100,6 @@ void buildDistanceTransformField(
   cv::distanceTransform(binary_map, dist_map, cv::DIST_L2, cv::DIST_MASK_PRECISE);
 
   const double max_distance_sq = std::pow(smear_deviation * 2.0, 2);
-  const double denominator = 2.0 * std::pow(smear_deviation, 2);
   const double resolution = field.resolution;
 
   field.data.assign(static_cast<std::size_t>(width) * height, 0.0F);
@@ -59,7 +114,11 @@ void buildDistanceTransformField(
       const double distance_sq = (pixel_dist * resolution) * (pixel_dist * resolution);
 
       if (distance_sq <= max_distance_sq) {
-        field.data[row_offset + x] = static_cast<float>(std::exp(-distance_sq / denominator));
+        const double distance = pixel_dist * resolution;
+        const double exponent = use_laplace_kernel
+                                  ? -distance / smear_deviation
+                                  : -distance_sq / (2.0 * std::pow(smear_deviation, 2));
+        field.data[row_offset + x] = static_cast<float>(std::exp(exponent));
       }
     }
   }
@@ -82,6 +141,36 @@ SubmapGrid::SubmapGrid(const std::vector<double> & resolutions)
 void SubmapGrid::add(const std::vector<Point2D> & points, uint64_t keyframe_id)
 {
   for (auto & [resolution, grid] : grids_) {
+    int min_x = 0;
+    int max_x = 0;
+    int min_y = 0;
+    int max_y = 0;
+    bool has_finite_point = false;
+
+    for (const auto & point : points) {
+      if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+        continue;
+      }
+
+      const GridIndex idx{
+        cellCoordinate(point.x, grid.resolution), cellCoordinate(point.y, grid.resolution)};
+      if (!has_finite_point) {
+        min_x = max_x = idx.x;
+        min_y = max_y = idx.y;
+        has_finite_point = true;
+      } else {
+        min_x = std::min(min_x, idx.x);
+        max_x = std::max(max_x, idx.x);
+        min_y = std::min(min_y, idx.y);
+        max_y = std::max(max_y, idx.y);
+      }
+    }
+
+    if (!has_finite_point) {
+      continue;
+    }
+    resizeGrid(grid, min_x, max_x, min_y, max_y);
+
     for (const auto & point : points) {
       if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
         continue;
@@ -161,7 +250,8 @@ size_t SubmapGrid::size() const
 }
 
 LikelihoodField SubmapGrid::getLikelihoodField(
-  double resolution, double smear_deviation, bool use_distance_transform, bool debug_timings) const
+  double resolution, double smear_deviation, bool use_distance_transform, bool use_laplace_kernel,
+  bool debug_timings) const
 {
   if (grids_.find(resolution) == grids_.end()) {
     throw std::invalid_argument("Requested resolution is not configured in SubmapGrid");
@@ -212,7 +302,7 @@ LikelihoodField SubmapGrid::getLikelihoodField(
   preparation_time = std::chrono::steady_clock::now();
 
   if (use_distance_transform) {
-    buildDistanceTransformField(field, grid, smear_deviation);
+    buildDistanceTransformField(field, grid, smear_deviation, use_laplace_kernel);
     return field;
   }
 
@@ -235,7 +325,9 @@ LikelihoodField SubmapGrid::getLikelihoodField(
     for (int dx = -rad; dx <= rad; ++dx) {
       const double dist_sq = (dx * dx + dy * dy) * resolution_sq;
       if (dist_sq <= max_smear_distance_sq) {
-        kernel_offsets.push_back({dx, dy, static_cast<float>(std::exp(-dist_sq / denom))});
+        const double distance = std::sqrt(dist_sq);
+        const double exponent = use_laplace_kernel ? -distance / smear_deviation : -dist_sq / denom;
+        kernel_offsets.push_back({dx, dy, static_cast<float>(std::exp(exponent))});
       }
     }
   }

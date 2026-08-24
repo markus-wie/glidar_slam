@@ -86,6 +86,7 @@ struct Parameters
 
   // Correlative Scan Matcher Parameters
   double csm_smear_deviation{0.1};
+  bool csm_use_laplace_kernel{false};
   bool csm_use_distance_transform{false};
   bool csm_use_tbb{false};
   bool csm_use_penalty{true};
@@ -188,6 +189,7 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  ground_matching_debug_topic: " << p.ground_matching_debug_topic << ",\n"
      << "  csm_debug_enable: " << (p.csm_debug_enable ? "true" : "false") << ",\n"
      << "  csm_smear_deviation: " << p.csm_smear_deviation << ",\n"
+     << "  csm_use_laplace_kernel: " << (p.csm_use_laplace_kernel ? "true" : "false") << ",\n"
      << "  csm_use_distance_transform: " << (p.csm_use_distance_transform ? "true" : "false")
      << ",\n"
      << "  csm_use_tbb: " << (p.csm_use_tbb ? "true" : "false") << ",\n"

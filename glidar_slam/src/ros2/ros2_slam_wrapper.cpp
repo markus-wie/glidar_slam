@@ -331,6 +331,8 @@ void Ros2SlamWrapper::processCSMParameters()
   }
 
   parameters_->csm_smear_deviation = this->declare_parameter<double>("csm_smear_deviation", 0.1);
+  parameters_->csm_use_laplace_kernel =
+    this->declare_parameter<bool>("csm_use_laplace_kernel", false);
   parameters_->csm_use_distance_transform =
     this->declare_parameter<bool>("csm_use_distance_transform", false);
   parameters_->csm_use_tbb = this->declare_parameter<bool>("csm_use_tbb", false);
@@ -460,6 +462,8 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.csm_debug_enable = parameter.as_bool();
     } else if (name == "csm_smear_deviation") {
       updated.csm_smear_deviation = parameter.as_double();
+    } else if (name == "csm_use_laplace_kernel") {
+      updated.csm_use_laplace_kernel = parameter.as_bool();
     } else if (name == "csm_use_distance_transform") {
       updated.csm_use_distance_transform = parameter.as_bool();
     } else if (name == "csm_use_tbb") {
@@ -836,14 +840,18 @@ std::optional<visualization_msgs::msg::Marker> Ros2SlamWrapper::keyframeCovarian
     return std::nullopt;
   }
 
-  Eigen::Matrix2d covariance;
-  covariance << (*keyframe.covariance)(3, 3),
+  Eigen::Matrix2d local_covariance;
+  local_covariance << (*keyframe.covariance)(3, 3),
     0.5 * ((*keyframe.covariance)(3, 4) + (*keyframe.covariance)(4, 3)),
     0.5 * ((*keyframe.covariance)(3, 4) + (*keyframe.covariance)(4, 3)),
     (*keyframe.covariance)(4, 4);
-  if (!covariance.allFinite()) {
+  if (!local_covariance.allFinite()) {
     return std::nullopt;
   }
+
+  const Eigen::Matrix2d local_to_map =
+    Eigen::Rotation2Dd(keyframe.pose.rotation().yaw()).toRotationMatrix();
+  const Eigen::Matrix2d covariance = local_to_map * local_covariance * local_to_map.transpose();
 
   Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> solver(covariance);
   if (solver.info() != Eigen::Success || (solver.eigenvalues().array() <= 0.0).any()) {
