@@ -15,8 +15,10 @@ find_package(visualization_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(cv_bridge REQUIRED)
+find_package(message_filters REQUIRED)
 find_package(GTSAM REQUIRED)
-find_package(PCL REQUIRED COMPONENTS common registration)
+find_package(PCL REQUIRED COMPONENTS common registration segmentation)
+find_package(pcl_conversions REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(nanoflann REQUIRED)
 
@@ -25,10 +27,16 @@ include_directories(include)
 add_library(${PROJECT_NAME}_core SHARED
   src/core/correlative_scan_matcher.cpp
   src/core/graph_optimizer.cpp
+  src/core/ground_plane_extractor.cpp
+  src/core/ground_plane_factor.cpp
+  src/core/ground_marking_grid.cpp
   src/core/loop_closure.cpp
   src/core/system.cpp
   src/core/occupancy_grid.cpp
   src/core/map_database.cpp
+  src/core/camera_model.cpp
+  src/core/laser_scan.cpp
+  src/core/sensor_data.cpp
 )
 
 target_precompile_headers(${PROJECT_NAME}_core PUBLIC
@@ -62,6 +70,7 @@ target_link_libraries(${PROJECT_NAME}_core
   ${PCL_LIBRARIES}
   ${Eigen3_LIBRARIES}
   nanoflann::nanoflann
+  ${OpenCV_LIBS}
 )
 
 add_library(${PROJECT_NAME}_ros2 SHARED
@@ -98,6 +107,8 @@ target_link_libraries(${PROJECT_NAME}_ros2
   ${visualization_msgs_TARGETS}
   tf2_ros::tf2_ros
   cv_bridge::cv_bridge
+  message_filters::message_filters
+  pcl_conversions::pcl_conversions
   ${OpenCV_LIBS}
   gtsam
   ${PCL_LIBRARIES}

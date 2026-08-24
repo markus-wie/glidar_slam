@@ -5,6 +5,7 @@ glidar_slam:
     odom_frame: odom
     map_frame: map
     scan_frame: laser
+    camera_frame: camera
     base_frame: base_link
     
     # ROS Topic Parameters
@@ -13,6 +14,9 @@ glidar_slam:
     odom_topic: /odometry/filtered
     csm_debug_low_topic: glidar_slam/debug/csm_likelihood_low
     csm_debug_high_topic: glidar_slam/debug/csm_likelihood_high
+    color_image_topic: /camera/color/image_raw
+    aligned_depth_image_topic: /camera/aligned_depth/image_raw
+    color_camera_info_topic: /camera/color/camera_info
 
     # Odometry Covariance Override
     # [x, y, z, roll, pitch, yaw]
@@ -28,6 +32,36 @@ glidar_slam:
 
     # Submap Parameters
     submap_window_size: 5
+
+    # Ground Observation Parameters
+    ground_debug_enable: true
+    ground_debug_cloud_topic: glidar_slam/debug/ground_inliers
+    ground_debug_marker_topic: glidar_slam/debug/ground_plane
+    ground_debug_image_topic: glidar_slam/debug/ground_overlay
+    ground_debug_plane_size: 4.0
+    ground_optimization_enable: true
+    ground_observation_max_age_sec: 0.1
+    ground_minimum_inlier_count: 100
+    ground_normal_sigma: 0.05
+    ground_distance_sigma: 0.03
+    # Weak roll/pitch/Z constraint used only when no valid plane observation is available.
+    ground_fallback_variance: 1.0
+    # [left, right, top, bottom] fractions omitted before RGB-D ground extraction.
+    ground_roi_ratios: "0.0 0.0 0.2 0.4"
+
+    ground_extraction_pixel_stride: 2
+    ground_extraction_voxel_size: 0.02
+    # The max 
+    ground_extraction_max_distance: 3.0
+    # Distance threshold to declare inlies during ground plane fitting. 
+    # The method uses the MSCA method which is more robust against noise, so this value can be relatively large
+    ground_extraction_distance_threshold: 0.1
+    ground_marking_map_enable: true
+    ground_marking_map_topic: ground_markings_map
+    ground_marking_map_resolution: 0.02
+    ground_marking_map_padding: 2
+    # Adaptive-threshold pixels at or above this value are treated as white markings.
+    ground_marking_white_threshold: 200
 
     #### Loop Closure Parameters
     loop_debug_enable: false
@@ -48,7 +82,6 @@ glidar_slam:
     loop_maximum_consistency_error: 0.5
     
     #### Correlative Scan Matcher Parameters
-    csm_debug_images_enable: true
     csm_debug_enable: false
     csm_smear_deviation: 0.1
     csm_use_penalty: false
@@ -73,4 +106,3 @@ glidar_slam:
     # iSAM 2 Parameters
     isam_relinearizeThreshold: 0.1
     isam_relinearizeSkip: 10
-      

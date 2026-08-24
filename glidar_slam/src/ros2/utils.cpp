@@ -1,9 +1,11 @@
 #include "glidar_slam/ros2/utils.hpp"
 
 namespace glidar_slam::ros2 {
-nav_msgs::msg::OccupancyGrid Utils::toRosMessage(
-  const glidar_slam::core::OccupancyGrid & core_grid, const std::string & frame_id,
-  const rclcpp::Time & stamp)
+namespace {
+
+template <typename Grid>
+nav_msgs::msg::OccupancyGrid toRosMessage(
+  const Grid & core_grid, const std::string & frame_id, const rclcpp::Time & stamp)
 {
   nav_msgs::msg::OccupancyGrid msg;
   const auto & info = core_grid.getInfo();
@@ -28,5 +30,21 @@ nav_msgs::msg::OccupancyGrid Utils::toRosMessage(
   msg.data = core_grid.getData();
 
   return msg;
+}
+
+}  // namespace
+
+nav_msgs::msg::OccupancyGrid Utils::toRosMessage(
+  const glidar_slam::core::OccupancyGrid & core_grid, const std::string & frame_id,
+  const rclcpp::Time & stamp)
+{
+  return glidar_slam::ros2::toRosMessage(core_grid, frame_id, stamp);
+}
+
+nav_msgs::msg::OccupancyGrid Utils::toRosMessage(
+  const glidar_slam::core::GroundMarkingGrid & core_grid, const std::string & frame_id,
+  const rclcpp::Time & stamp)
+{
+  return glidar_slam::ros2::toRosMessage(core_grid, frame_id, stamp);
 }
 }  // namespace glidar_slam::ros2

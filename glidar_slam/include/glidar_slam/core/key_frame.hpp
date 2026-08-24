@@ -4,6 +4,8 @@
 #include <optional>
 #include <utility>
 
+#include "glidar_slam/core/ground_plane_extractor.hpp"
+#include "glidar_slam/core/laser_scan.hpp"
 #include "glidar_slam/core/types.hpp"
 #include "gtsam/geometry/Pose3.h"
 
@@ -16,13 +18,15 @@ public:
 
   KeyFrame(
     uint64_t key, double timestamp, const gtsam::Pose3 & pose, const gtsam::Pose3 & odom_pose,
-    PointCloudXYZ scan, std::optional<gtsam::Matrix66> covariance = std::nullopt)
+    std::shared_ptr<const LaserScan> scan, std::optional<gtsam::Matrix66> covariance = std::nullopt,
+    std::optional<GroundPlaneObservation> ground_observation = std::nullopt)
   : key(key),
     timestamp(timestamp),
     pose(pose),
     odom_pose(odom_pose),
-    covariance(covariance),
-    scan(std::move(scan))
+    covariance(std::move(covariance)),
+    scan(std::move(scan)),
+    ground_observation(std::move(ground_observation))
   {
   }
 
@@ -41,7 +45,8 @@ public:
 
   std::optional<gtsam::Matrix66> covariance;
 
-  PointCloudXYZ scan;
+  std::shared_ptr<const LaserScan> scan;
+  std::optional<GroundPlaneObservation> ground_observation;
 };
 
 }  // namespace glidar_slam::core

@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 
+#include "glidar_slam/core/ground_plane_factor.hpp"
 #include "glidar_slam/core/parameters.hpp"
 #include "gtsam/geometry/Pose3.h"
 #include "gtsam/nonlinear/ISAM2.h"
@@ -15,13 +17,18 @@ namespace glidar_slam::core {
 class GraphOptimizer
 {
 public:
-  GraphOptimizer(const std::shared_ptr<Parameters> & params);
+  explicit GraphOptimizer(const std::shared_ptr<Parameters> & params);
 
   void initialize(const gtsam::Pose3 & initial_pose, uint64_t timestamp);
 
   uint64_t addRelativeFactor(
     uint64_t from_key, uint64_t to_key, const gtsam::Pose3 & relative_pose,
     const gtsam::Matrix66 & covariance);
+
+  void addGroundPlaneFactor(
+    uint64_t key, const gtsam::Vector3 & observed_normal_in_base, double observed_distance_to_base,
+    const gtsam::Vector3 & reference_normal_in_map, double reference_plane_offset,
+    double normal_sigma, double distance_sigma);
 
   gtsam::Values optimize();
 

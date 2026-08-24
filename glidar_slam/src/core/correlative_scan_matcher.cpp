@@ -47,16 +47,17 @@ double LikelihoodField::getScore(double x, double y) const
 }
 
 CsmResult CorrelativeScanMatcher::match(
-  const LaserScan & reference, const LaserScan & current) const
+  const std::vector<Point2D> & reference_points, const std::vector<Point2D> & current_points,
+  const Pose2D & pose_estimate) const
 {
   CsmResult result{};
-  result.optimized_pose = current.world_pose;
+  result.optimized_pose = pose_estimate;
   result.score = 0.0;
   result.covariance = Eigen::Matrix3d::Identity();
 
   const std::vector<CsmSearchStage> & stages = params_->csm_search_stages;
 
-  if (stages.empty() || reference.points.empty() || current.points.empty()) {
+  if (stages.empty() || reference_points.empty() || current_points.empty()) {
     result.covariance(0, 0) = 500.0;
     result.covariance(1, 1) = 500.0;
     result.covariance(2, 2) = 4.0;
@@ -67,26 +68,25 @@ CsmResult CorrelativeScanMatcher::match(
   fields.reserve(stages.size());
 
   for (const auto & stage : stages) {
-    fields.push_back(buildField(reference.points, stage.field_resolution));
+    fields.push_back(buildField(reference_points, stage.field_resolution));
   }
 
-  const Pose2D initial_guess = current.world_pose;
-  const double initial_score = evaluatePose(current.points, fields.front(), initial_guess);
-  Pose2D best_pose = initial_guess;
+  const double initial_score = evaluatePose(current_points, fields.front(), pose_estimate);
+  Pose2D best_pose = pose_estimate;
 
   std::vector<SearchResult> results;
   results.reserve(stages.size());
 
   if (params_->csm_debug_enable) {
     SAM_INFO(
-      "CSM initial guess: x={}, y={}, yaw={}, score={}", initial_guess.x, initial_guess.y,
-      initial_guess.yaw, initial_score);
+      "CSM pose estimate: x={}, y={}, yaw={}, score={}", pose_estimate.x, pose_estimate.y,
+      pose_estimate.yaw, initial_score);
   }
 
   for (std::size_t stage_index = 0; stage_index < stages.size(); ++stage_index) {
     const auto & stage = stages[stage_index];
 
-    SearchResult stage_result = searchSpace(current.points, fields[stage_index], best_pose, stage);
+    SearchResult stage_result = searchSpace(current_points, fields[stage_index], best_pose, stage);
 
     best_pose = stage_result.best_pose;
 
@@ -109,8 +109,8 @@ CsmResult CorrelativeScanMatcher::match(
     SAM_INFO(
       "CSM final pose: x={}, y={}, yaw={}, score={}, delta_x={}, delta_y={}, delta_yaw={}",
       best_pose.x, best_pose.y, best_pose.yaw, results.back().best_score,
-      best_pose.x - initial_guess.x, best_pose.y - initial_guess.y,
-      Utils::normalizeAngle(best_pose.yaw - initial_guess.yaw));
+      best_pose.x - pose_estimate.x, best_pose.y - pose_estimate.y,
+      Utils::normalizeAngle(best_pose.yaw - pose_estimate.yaw));
   }
 
   result.optimized_pose = best_pose;

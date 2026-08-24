@@ -59,6 +59,18 @@ uint64_t GraphOptimizer::addRelativeFactor(
   return to_key;
 }
 
+void GraphOptimizer::addGroundPlaneFactor(
+  uint64_t key, const gtsam::Vector3 & observed_normal_in_base, double observed_distance_to_base,
+  const gtsam::Vector3 & reference_normal_in_map, double reference_plane_offset,
+  double normal_sigma, double distance_sigma)
+{
+  const auto noise = gtsam::noiseModel::Diagonal::Sigmas(
+    (gtsam::Vector(3) << normal_sigma, normal_sigma, distance_sigma).finished());
+  pending_factors_.add(std::make_shared<GroundPlaneFactor>(
+    key, observed_normal_in_base, observed_distance_to_base, reference_normal_in_map,
+    reference_plane_offset, noise));
+}
+
 gtsam::Values GraphOptimizer::optimize()
 {
   std::lock_guard<std::mutex> lock(isam_mutex_);

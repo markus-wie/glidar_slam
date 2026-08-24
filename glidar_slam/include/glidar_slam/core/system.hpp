@@ -10,10 +10,12 @@
 
 #include "glidar_slam/core/correlative_scan_matcher.hpp"
 #include "glidar_slam/core/graph_optimizer.hpp"
+#include "glidar_slam/core/ground_plane_extractor.hpp"
 #include "glidar_slam/core/key_frame.hpp"
 #include "glidar_slam/core/loop_closure.hpp"
 #include "glidar_slam/core/map_database.hpp"
 #include "glidar_slam/core/parameters.hpp"
+#include "glidar_slam/core/sensor_data.hpp"
 #include "gtsam/geometry/Pose3.h"
 
 namespace glidar_slam::core {
@@ -21,22 +23,21 @@ namespace glidar_slam::core {
 class SlamSystem
 {
 public:
-  struct LaserScanOutput
-  {
-    std::optional<gtsam::Pose3> optimized_pose;
-    std::optional<CsmResult::DebugImage> low_res_debug;
-    std::optional<CsmResult::DebugImage> high_res_debug;
-  };
-
-  SlamSystem(const std::shared_ptr<Parameters> & parameters);
+  explicit SlamSystem(const std::shared_ptr<Parameters> & parameters);
   ~SlamSystem();
 
-  LaserScanOutput handleLaserScan(
-    double timestamp, const PointCloudXYZ & scan, const gtsam::Pose3 & odom_pose,
+  bool process(
+    double timestamp, const SensorData & sensor_data, const gtsam::Pose3 & odom_pose,
     const gtsam::Matrix66 & odom_covariance);
+
+  std::optional<gtsam::Pose3> getLatestPose() const;
+  std::optional<CsmResult::DebugImage> getLatestLowResDebug() const;
+  std::optional<CsmResult::DebugImage> getLatestHighResDebug() const;
+  std::optional<GroundPlaneObservation> getLatestGroundObservation() const;
 
   PointCloudXYZ getMapCloud() const;
   std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> getTransformedKeyFrameScans() const;
+  std::vector<pcl::PointCloud<pcl::PointXYZRGB>> getTransformedGroundMarkingClouds() const;
 
   std::vector<std::shared_ptr<const KeyFrame>> getKeyFrames() const;
 
@@ -51,8 +52,6 @@ private:
     const PointCloudXYZ & scan, const gtsam::Pose3 & pose, const Point2D & viewpoint,
     std::vector<Point2D> & output);
 
-  void initializeIfNeeded(
-    double timestamp, const PointCloudXYZ & scan, const gtsam::Pose3 & odom_pose);
   bool shouldCreateKeyFrame(const gtsam::Pose3 & current_odom_pose) const;
 
   void processLoopClosureProposals();
@@ -72,6 +71,11 @@ private:
 
   gtsam::Pose3 latest_map_to_odom_;
   mutable std::mutex latest_map_to_odom_mutex_;
+  std::optional<gtsam::Pose3> latest_pose_;
+  std::optional<CsmResult::DebugImage> latest_low_res_debug_;
+  std::optional<CsmResult::DebugImage> latest_high_res_debug_;
+  std::optional<GroundPlaneObservation> latest_ground_observation_;
+  mutable std::mutex latest_output_mutex_;
 };
 
 }  // namespace glidar_slam::core

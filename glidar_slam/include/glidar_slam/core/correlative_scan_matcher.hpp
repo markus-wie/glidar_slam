@@ -52,7 +52,9 @@ class CorrelativeScanMatcher
 public:
   explicit CorrelativeScanMatcher(const std::shared_ptr<Parameters> & params);
 
-  CsmResult match(const LaserScan & reference, const LaserScan & current) const;
+  CsmResult match(
+    const std::vector<Point2D> & reference_points, const std::vector<Point2D> & current_points,
+    const Pose2D & pose_estimate) const;
 
 private:
   struct SearchResponse
