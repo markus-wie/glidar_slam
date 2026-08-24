@@ -40,6 +40,7 @@ public:
   std::vector<pcl::PointCloud<pcl::PointXYZRGB>> getTransformedGroundMarkingClouds() const;
 
   std::vector<std::shared_ptr<const KeyFrame>> getKeyFrames() const;
+  std::vector<std::pair<uint64_t, uint64_t>> getLoopClosures() const;
 
   gtsam::Pose3 getMapToOdom() const;
 
@@ -54,7 +55,7 @@ private:
 
   bool shouldCreateKeyFrame(const gtsam::Pose3 & current_odom_pose) const;
 
-  void processLoopClosureProposals();
+  bool processLoopClosureProposals();
 
   void dispatchFindLoopClosure(const KeyFrame & latest_keyframe);
 
@@ -76,6 +77,9 @@ private:
   std::optional<CsmResult::DebugImage> latest_high_res_debug_;
   std::optional<GroundPlaneObservation> latest_ground_observation_;
   mutable std::mutex latest_output_mutex_;
+  std::vector<std::pair<uint64_t, uint64_t>> loop_closures_;
+  mutable std::mutex loop_closures_mutex_;
+  bool loop_closure_optimization_pending_{false};
 };
 
 }  // namespace glidar_slam::core

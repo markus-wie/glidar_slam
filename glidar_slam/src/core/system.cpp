@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <unordered_map>
 
 #include "glidar_slam/core/correlative_scan_matcher.hpp"
 #include "glidar_slam/core/ground_plane_extractor.hpp"
@@ -66,6 +67,7 @@ bool SlamSystem::process(
 
   const auto loop_proposals_start = std::chrono::steady_clock::now();
   processLoopClosureProposals();
+
   if (parameters_->debug_timings) {
     loop_proposals_ms = elapsedMilliseconds(loop_proposals_start);
   }
@@ -236,7 +238,16 @@ bool SlamSystem::process(
 
   map_database_->addKeyFrame(new_keyframe);
 
-  map_database_->updatePoses(updated_states);  // maybe call, maybe dont
+  std::unordered_map<uint64_t, gtsam::Matrix66> optimized_covariances;
+  if (loop_closure_optimization_pending_) {
+    for (const auto & keyframe : map_database_->getAllKeyFrames()) {
+      if (const auto covariance = graph_optimizer_->getMarginalCovariance(keyframe->key)) {
+        optimized_covariances.emplace(keyframe->key, *covariance);
+      }
+    }
+  }
+  map_database_->updatePoses(updated_states, optimized_covariances);
+  loop_closure_optimization_pending_ = false;
 
   {
     std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
@@ -344,7 +355,7 @@ void SlamSystem::appendVisiblePoints(
   }
 }
 
-void SlamSystem::processLoopClosureProposals()
+bool SlamSystem::processLoopClosureProposals()
 {
   std::vector<LoopClosureProposal> proposals;
 
@@ -359,10 +370,19 @@ void SlamSystem::processLoopClosureProposals()
     graph_optimizer_->addRelativeFactor(
       proposal.from_key, proposal.to_key, proposal.relative_pose, proposal.covariance);
 
+    {
+      std::lock_guard<std::mutex> lock(loop_closures_mutex_);
+      loop_closures_.emplace_back(proposal.from_key, proposal.to_key);
+    }
+
     SAM_INFO(
       "Loop closure accepted: from={}, to={}, score={}", proposal.from_key, proposal.to_key,
       proposal.score);
   }
+
+  loop_closure_optimization_pending_ = loop_closure_optimization_pending_ || !proposals.empty();
+
+  return !proposals.empty();
 }
 
 void SlamSystem::dispatchFindLoopClosure(const KeyFrame & latest_keyframe)
@@ -460,6 +480,12 @@ std::vector<pcl::PointCloud<pcl::PointXYZRGB>> SlamSystem::getTransformedGroundM
 std::vector<std::shared_ptr<const KeyFrame>> SlamSystem::getKeyFrames() const
 {
   return map_database_->getAllKeyFrames();
+}
+
+std::vector<std::pair<uint64_t, uint64_t>> SlamSystem::getLoopClosures() const
+{
+  std::lock_guard<std::mutex> lock(loop_closures_mutex_);
+  return loop_closures_;
 }
 
 gtsam::Pose3 SlamSystem::projectPlanar(const gtsam::Pose3 & pose)

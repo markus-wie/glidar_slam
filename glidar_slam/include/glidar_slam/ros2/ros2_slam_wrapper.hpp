@@ -56,7 +56,9 @@ private:
     const std::string & child_frame, const rclcpp::Time & stamp);
   static geometry_msgs::msg::PoseStamped poseToPoseStamped(
     const gtsam::Pose3 & pose, const std::string & frame, const rclcpp::Time & stamp);
-  void publishGraph(const std::vector<std::shared_ptr<const KeyFrame>> & keyframes);
+  void publishGraph(
+    const std::vector<std::shared_ptr<const KeyFrame>> & keyframes,
+    const std::vector<std::pair<uint64_t, uint64_t>> & loop_closures);
   void publishMapToOdom();
   void publishOccupancyGrid(
     const std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> & scans_transformed,

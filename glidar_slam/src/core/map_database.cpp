@@ -130,12 +130,18 @@ void MapDatabase::addKeyFrame(std::shared_ptr<KeyFrame> keyframe)
   }
 }
 
-void MapDatabase::updatePoses(const gtsam::Values & optimized_values)
+void MapDatabase::updatePoses(
+  const gtsam::Values & optimized_values,
+  const std::unordered_map<uint64_t, gtsam::Matrix66> & optimized_covariances)
 {
   std::unique_lock<std::shared_mutex> lock(rw_mutex_);
   for (const std::shared_ptr<KeyFrame> & keyframe : keyframes_) {
     if (optimized_values.exists(keyframe->key)) {
       keyframe->pose = optimized_values.at<gtsam::Pose3>(keyframe->key);
+    }
+    const auto covariance = optimized_covariances.find(keyframe->key);
+    if (covariance != optimized_covariances.end()) {
+      keyframe->covariance = covariance->second;
     }
   }
   rebuildSpatialIndex();

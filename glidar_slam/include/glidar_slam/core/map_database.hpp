@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <shared_mutex>
+#include <unordered_map>
 #include <vector>
 
 #include "glidar_slam/core/key_frame.hpp"
@@ -18,7 +19,9 @@ public:
 
   void addKeyFrame(std::shared_ptr<KeyFrame> keyframe);
 
-  void updatePoses(const gtsam::Values & optimized_values);
+  void updatePoses(
+    const gtsam::Values & optimized_values,
+    const std::unordered_map<uint64_t, gtsam::Matrix66> & optimized_covariances = {});
 
   std::vector<std::shared_ptr<const KeyFrame>> getNearbyKeyFrames(
     const gtsam::Pose3 & query_pose, double radius) const;

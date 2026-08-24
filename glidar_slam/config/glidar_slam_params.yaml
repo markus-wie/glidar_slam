@@ -36,7 +36,7 @@ glidar_slam:
     submap_window_size: 5
 
     # Ground Observation Parameters
-    ground_debug_enable: true
+    ground_debug_enable: false
     ground_debug_cloud_topic: glidar_slam/debug/ground_inliers
     ground_debug_marker_topic: glidar_slam/debug/ground_plane
     ground_debug_image_topic: glidar_slam/debug/ground_overlay
@@ -75,8 +75,11 @@ glidar_slam:
     loop_maximum_distance: 2.0
     # max heading difference between query and candidate keyframes to be considered for loop closure
     loop_maximum_yaw_difference: 1.0
-    loop_mahalanobis_threshold: 3.0
-    # noise floor for loop closure proposals
+    # A measure of how many standard deviations are allowed to be in between
+    # the relative pose between the query and candidate keyframes 
+    # and the expected relative pose.
+    loop_mahalanobis_threshold: 2.0
+    # noise floor for loop closure proposals to guarantee invertible matrices 
     loop_minimum_xy_variance: 0.01
     # minimum score for a loop closure proposal to be considered valid
     loop_minimum_score: 0.5
@@ -90,11 +93,11 @@ glidar_slam:
     csm_use_distance_transform: false
     # Uses TBB for parallel candidate evaluation when TBB is available at build time.
     csm_use_tbb: true
-    # Additional penalties for that are being applied to the CMS score by the current deviation from the initial guess
+    # Additional penalties that are being applied to the CSM score by the current deviation from the initial guess
     # This is a strategy to solve the long corridor problem by trusting the odometry induced guess more than the matcher
     # They represent the standard deviation of a Gaussian that is applied to the CSM score based on the distance and angle from the initial guess.
     # The actual penalty is computed as 1 - 0.2 * (delta^2 / std_dev^2), which acts as a flattened first order approximation of a Gaussian kernel
-    csm_use_penalty: false
+    csm_use_penalty: true
     csm_distance_penalty_std_dev: 0.5
     csm_angle_penalty_std_dev: 0.5
 

@@ -9,8 +9,10 @@
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
+#include "Eigen/Eigenvalues"
 #include "Eigen/Geometry"
 #include "cv_bridge/cv_bridge.hpp"
 #include "geometry_msgs/msg/quaternion.hpp"
@@ -511,7 +513,7 @@ void Ros2SlamWrapper::ScanRGBDCallback(
 
   std::vector<std::shared_ptr<const KeyFrame>> keyframes = slam_system_->getKeyFrames();
 
-  publishGraph(keyframes);
+  publishGraph(keyframes, slam_system_->getLoopClosures());
   publishOccupancyGrid(scans_transformed, rclcpp::Time(scan_msg->header.stamp));
   publishGroundMarkingGrid(rclcpp::Time(scan_msg->header.stamp));
   publishDebugImage(rclcpp::Time(scan_msg->header.stamp));
@@ -762,15 +764,131 @@ visualization_msgs::msg::Marker keyframeToMarker(
   return marker;
 }
 
+std::optional<visualization_msgs::msg::Marker> keyframeCovarianceToMarker(
+  const KeyFrame & keyframe, const std::string & frame)
+{
+  if (!keyframe.covariance) {
+    return std::nullopt;
+  }
+
+  Eigen::Matrix2d covariance;
+  covariance << (*keyframe.covariance)(3, 3),
+    0.5 * ((*keyframe.covariance)(3, 4) + (*keyframe.covariance)(4, 3)),
+    0.5 * ((*keyframe.covariance)(3, 4) + (*keyframe.covariance)(4, 3)),
+    (*keyframe.covariance)(4, 4);
+  if (!covariance.allFinite()) {
+    return std::nullopt;
+  }
+
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> solver(covariance);
+  if (solver.info() != Eigen::Success || (solver.eigenvalues().array() <= 0.0).any()) {
+    return std::nullopt;
+  }
+
+  const auto & translation = keyframe.pose.translation();
+  const Eigen::Vector2d axis = solver.eigenvectors().col(1);
+  const double major_axis = std::sqrt(solver.eigenvalues()(1));
+  const double minor_axis = std::sqrt(solver.eigenvalues()(0));
+
+  visualization_msgs::msg::Marker marker;
+  marker.header.stamp = rclcpp::Time(keyframe.timestamp);
+  marker.header.frame_id = frame;
+  marker.ns = "slam_graph_covariance";
+  marker.id = keyframe.key;
+  marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+  marker.action = visualization_msgs::msg::Marker::ADD;
+  marker.scale.x = 0.02;
+  marker.color.r = 1.0f;
+  marker.color.g = 0.1f;
+  marker.color.b = 0.1f;
+  marker.color.a = 0.8f;
+
+  constexpr int point_count = 36;
+  marker.points.reserve(point_count + 1);
+  const Eigen::Vector2d perpendicular_axis(-axis.y(), axis.x());
+  for (int point_index = 0; point_index <= point_count; ++point_index) {
+    const double angle = 2.0 * M_PI * static_cast<double>(point_index) / point_count;
+    const Eigen::Vector2d point = Eigen::Vector2d(translation.x(), translation.y()) +
+                                  major_axis * std::cos(angle) * axis +
+                                  minor_axis * std::sin(angle) * perpendicular_axis;
+
+    geometry_msgs::msg::Point marker_point;
+    marker_point.x = point.x();
+    marker_point.y = point.y();
+    marker_point.z = translation.z();
+    marker.points.push_back(marker_point);
+  }
+
+  return marker;
+}
+
+visualization_msgs::msg::Marker loopClosuresToMarker(
+  const std::vector<std::shared_ptr<const KeyFrame>> & keyframes,
+  const std::vector<std::pair<uint64_t, uint64_t>> & loop_closures, const std::string & frame)
+{
+  std::unordered_map<uint64_t, gtsam::Pose3> poses;
+  poses.reserve(keyframes.size());
+  for (const auto & keyframe : keyframes) {
+    poses.emplace(keyframe->key, keyframe->pose);
+  }
+
+  visualization_msgs::msg::Marker marker;
+  marker.header.frame_id = frame;
+  marker.ns = "slam_graph_loop_closures";
+  marker.id = 0;
+  marker.type = visualization_msgs::msg::Marker::LINE_LIST;
+  marker.action = visualization_msgs::msg::Marker::ADD;
+  marker.scale.x = 0.04;
+  marker.color.r = 1.0f;
+  marker.color.g = 0.65f;
+  marker.color.b = 0.0f;
+  marker.color.a = 1.0f;
+
+  for (const auto & [from_key, to_key] : loop_closures) {
+    const auto from_pose = poses.find(from_key);
+    const auto to_pose = poses.find(to_key);
+    if (from_pose == poses.end() || to_pose == poses.end()) {
+      continue;
+    }
+
+    geometry_msgs::msg::Point from_point;
+    from_point.x = from_pose->second.x();
+    from_point.y = from_pose->second.y();
+    from_point.z = from_pose->second.z();
+    marker.points.push_back(from_point);
+
+    geometry_msgs::msg::Point to_point;
+    to_point.x = to_pose->second.x();
+    to_point.y = to_pose->second.y();
+    to_point.z = to_pose->second.z();
+    marker.points.push_back(to_point);
+  }
+
+  if (marker.points.empty()) {
+    marker.action = visualization_msgs::msg::Marker::DELETE;
+  }
+  return marker;
+}
+
 }  // namespace
 
-void Ros2SlamWrapper::publishGraph(const std::vector<std::shared_ptr<const KeyFrame>> & keyframes)
+void Ros2SlamWrapper::publishGraph(
+  const std::vector<std::shared_ptr<const KeyFrame>> & keyframes,
+  const std::vector<std::pair<uint64_t, uint64_t>> & loop_closures)
 {
   visualization_msgs::msg::MarkerArray marker_array_msg;
 
   for (const auto & keyframe : keyframes) {
     marker_array_msg.markers.push_back(keyframeToMarker(*keyframe, parameters_->map_frame));
+    if (
+      const auto covariance_marker =
+        keyframeCovarianceToMarker(*keyframe, parameters_->map_frame)) {
+      marker_array_msg.markers.push_back(*covariance_marker);
+    }
   }
+
+  marker_array_msg.markers.push_back(
+    loopClosuresToMarker(keyframes, loop_closures, parameters_->map_frame));
 
   marker_array_publisher_->publish(marker_array_msg);
 }
