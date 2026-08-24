@@ -77,6 +77,16 @@ gtsam::Pose3 makePlanarPose(const gtsam::Pose3 & pose)
   return Utils::makePlanarPose(translation.x(), translation.y(), yaw);
 }
 
+Eigen::Matrix3d transformScanMatchCovarianceToRelativeFrame(
+  const Eigen::Matrix3d & covariance, const gtsam::Pose3 & reference_pose)
+{
+  const Eigen::Matrix2d map_to_reference =
+    Eigen::Rotation2Dd(-reference_pose.rotation().yaw()).toRotationMatrix();
+  Eigen::Matrix3d transform = Eigen::Matrix3d::Identity();
+  transform.topLeftCorner<2, 2>() = map_to_reference;
+  return transform * covariance * transform.transpose();
+}
+
 double computeTranslationDistance(const gtsam::Pose3 & lhs, const gtsam::Pose3 & rhs)
 {
   const auto delta = lhs.translation() - rhs.translation();
@@ -331,6 +341,8 @@ bool SlamSystem::process(
   }
 
   // Map the 3x3 CSM Covariance (x, y, yaw) to a 6x6 GTSAM Covariance Matrix
+  const Eigen::Matrix3d relative_csm_covariance =
+    transformScanMatchCovarianceToRelativeFrame(csm_result.covariance, reference_keyframe->pose);
   gtsam::Matrix66 csm_covariance = gtsam::Matrix66::Zero();
 
   // Inflate unobservable dimensions
@@ -339,18 +351,18 @@ bool SlamSystem::process(
   // Diagonal of csm_result.covariance:
   // [ x-x, y-y, yaw-yaw ]
   // gtsam covariance layout is [roll, pitch, yaw, x, y, z]
-  csm_covariance(0, 0) = INF_VAR;                      // roll-roll
-  csm_covariance(1, 1) = INF_VAR;                      // pitch-pitch
-  csm_covariance(2, 2) = csm_result.covariance(2, 2);  // yaw-yaw
-  csm_covariance(3, 3) = csm_result.covariance(0, 0);  // x-x
-  csm_covariance(4, 4) = csm_result.covariance(1, 1);  // y-y
-  csm_covariance(5, 5) = INF_VAR;                      // z-z
-  csm_covariance(3, 4) = csm_result.covariance(0, 1);  // x-y
-  csm_covariance(4, 3) = csm_result.covariance(1, 0);  // y-x
-  csm_covariance(3, 2) = csm_result.covariance(0, 2);  // x-yaw
-  csm_covariance(2, 3) = csm_result.covariance(2, 0);  // yaw-x
-  csm_covariance(4, 2) = csm_result.covariance(1, 2);  // y-yaw
-  csm_covariance(2, 4) = csm_result.covariance(2, 1);  // yaw-y
+  csm_covariance(0, 0) = INF_VAR;                        // roll-roll
+  csm_covariance(1, 1) = INF_VAR;                        // pitch-pitch
+  csm_covariance(2, 2) = relative_csm_covariance(2, 2);  // yaw-yaw
+  csm_covariance(3, 3) = relative_csm_covariance(0, 0);  // x-x
+  csm_covariance(4, 4) = relative_csm_covariance(1, 1);  // y-y
+  csm_covariance(5, 5) = INF_VAR;                        // z-z
+  csm_covariance(3, 4) = relative_csm_covariance(0, 1);  // x-y
+  csm_covariance(4, 3) = relative_csm_covariance(1, 0);  // y-x
+  csm_covariance(3, 2) = relative_csm_covariance(0, 2);  // x-yaw
+  csm_covariance(2, 3) = relative_csm_covariance(2, 0);  // yaw-x
+  csm_covariance(4, 2) = relative_csm_covariance(1, 2);  // y-yaw
+  csm_covariance(2, 4) = relative_csm_covariance(2, 1);  // yaw-y
 
   if (parameters_->csm_debug_enable) {
     SAM_INFO(
@@ -537,9 +549,11 @@ bool SlamSystem::process(
       }
     }
   }
+
   for (const auto & snapshot : map_database_->updatePoses(updated_states, optimized_covariances)) {
     map_builder_->submit(snapshot);
   }
+
   if (loop_closure_optimization_pending_) {
     map_builder_->rebuild(map_database_->getSnapshots());
     rebuildSubmap();

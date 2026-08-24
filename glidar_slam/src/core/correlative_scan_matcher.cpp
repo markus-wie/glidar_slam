@@ -20,38 +20,17 @@ namespace {
 
 std::vector<double> makeSearchPositions(double center, double window, double step)
 {
-  const int sample_count = std::max(1, static_cast<int>(std::ceil(window / step)));
-  const double start = center - window * 0.5;
+  const int half_steps = static_cast<int>(std::ceil((window / 2.0) / step));
+
   std::vector<double> positions;
-  positions.reserve(static_cast<std::size_t>(sample_count));
-  for (int index = 0; index < sample_count; ++index) {
-    positions.push_back(start + index * step);
+  // +1 for the center position
+  positions.reserve(2 * half_steps + 1);
+
+  for (int i = -half_steps; i <= half_steps; ++i) {
+    positions.push_back(center + i * step);
   }
+
   return positions;
-}
-
-double scoreCandidate(
-  const std::vector<Point2D> & points, const LikelihoodField & field, double x, double y)
-{
-  double score = 0.0;
-
-  int valid_points = 0;
-  for (const auto & point : points) {
-    const double eval_score = field.getScore(x + point.x, y + point.y);
-    if (eval_score < 0.0) {
-      continue;
-    }
-    score += eval_score;
-    ++valid_points;
-  }
-
-  if (valid_points == 0) {
-    return -1.0;
-  }
-
-  score /= static_cast<double>(valid_points);
-
-  return score;
 }
 
 double evaluatePoseScore(
@@ -76,7 +55,7 @@ double evaluatePoseScore(
     return -1.0;
   }
 
-  return score / static_cast<double>(valid_points);
+  return score / static_cast<double>(points.size());
 }
 
 }  // namespace
@@ -232,7 +211,7 @@ std::shared_ptr<const std::vector<LikelihoodField>> CorrelativeScanMatcher::getL
   for (const auto & stage : stages) {
     fields->push_back(submap_grid.getLikelihoodField(
       stage.field_resolution, params_->csm_smear_deviation, params_->csm_use_distance_transform,
-      params_->debug_timings));
+      params_->csm_use_laplace_kernel, params_->debug_timings));
   }
   return fields;
 }
@@ -286,15 +265,64 @@ void CorrelativeScanMatcher::evaluateYawSlice(
     rotated_points[point_index].y = s * points[point_index].x + c * points[point_index].y;
   }
 
-  const std::size_t yaw_offset = yaw_index * grid.candidates_per_yaw;
-  for (std::size_t x_index = 0; x_index < grid.x_positions.size(); ++x_index) {
-    for (std::size_t y_index = 0; y_index < grid.y_positions.size(); ++y_index) {
-      const std::size_t response_index = yaw_offset + x_index * grid.y_positions.size() + y_index;
+  // Cache field parameters locally to avoid multiple pointer-chasing steps in hot loop
+  const double origin_x = field.origin_x;
+  const double origin_y = field.origin_y;
+  const double inv_res = 1.0 / field.resolution;
+  const int field_width = field.width;
+  const int max_x = field.max_x_index;
+  const int max_y = field.max_y_index;
+  const float * __restrict field_ptr = field.data.data();
 
-      const double score =
-        scoreCandidate(rotated_points, field, grid.x_positions[x_index], grid.y_positions[y_index]);
-      result.responses[response_index] = {
-        {grid.x_positions[x_index], grid.y_positions[y_index], yaw}, score};
+  const std::size_t yaw_offset = yaw_index * grid.candidates_per_yaw;
+  const std::size_t y_size = grid.y_positions.size();
+
+  for (std::size_t x_index = 0; x_index < grid.x_positions.size(); ++x_index) {
+    const double candidate_x = grid.x_positions[x_index];
+
+    for (std::size_t y_index = 0; y_index < y_size; ++y_index) {
+      const double candidate_y = grid.y_positions[y_index];
+
+      double total_score = 0.0;
+      int valid_points = 0;
+
+      // Hot Loop: Completely linear and branchless where possible
+      for (const auto & point : rotated_points) {
+        const double map_x = candidate_x + point.x;
+        const double map_y = candidate_y + point.y;
+
+        const double px = (map_x - origin_x) * inv_res;
+        const double py = (map_y - origin_y) * inv_res;
+
+        const int x0 = static_cast<int>(std::floor(px));
+        const int y0 = static_cast<int>(std::floor(py));
+
+        // Fast out-of-bounds gate
+        if (x0 >= 0 && x0 < max_x && y0 >= 0 && y0 < max_y) {
+          const double dx = px - x0;
+          const double dy = py - y0;
+
+          const int idx0 = y0 * field_width + x0;
+          const int idx1 = idx0 + field_width;
+
+          const float s00 = field_ptr[idx0];
+          const float s10 = field_ptr[idx0 + 1];
+          const float s01 = field_ptr[idx1];
+          const float s11 = field_ptr[idx1 + 1];
+
+          total_score += (1.0 - dx) * (1.0 - dy) * s00 + dx * (1.0 - dy) * s10 +
+                         (1.0 - dx) * dy * s01 + dx * dy * s11;
+          ++valid_points;
+        }
+      }
+
+      double final_score = -1.0;
+      if (valid_points >= static_cast<int>(points.size() * 0.3)) {  // 30% overlap gate
+        final_score = total_score / static_cast<double>(points.size());
+      }
+
+      const std::size_t response_index = yaw_offset + x_index * y_size + y_index;
+      result.responses[response_index] = {{candidate_x, candidate_y, yaw}, final_score};
     }
   }
 }
