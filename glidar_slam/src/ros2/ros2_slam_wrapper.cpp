@@ -42,6 +42,7 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   slam_system_ = std::make_unique<SlamSystem>(parameters_);
   occ_grid_ = std::make_unique<OccupancyGrid>(parameters_);
   ground_marking_grid_ = std::make_unique<glidar_slam::core::GroundMarkingGrid>(parameters_);
+  ground_texture_grid_ = std::make_unique<glidar_slam::core::GroundTextureGrid>(parameters_);
   latest_odom_covariance_.setIdentity();
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*(tf_buffer_));
@@ -115,14 +116,19 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->declare_parameter<double>("ground_extraction_max_distance", 4.0);
   parameters_->ground_extraction_distance_threshold =
     this->declare_parameter<double>("ground_extraction_distance_threshold", 0.05);
-  parameters_->ground_marking_map_enable =
-    this->declare_parameter<bool>("ground_marking_map_enable", true);
+  parameters_->ground_mapping_enable_texture_mapping =
+    this->declare_parameter<bool>("ground_mapping_enable_texture_mapping", true);
+  parameters_->ground_mapping_enable_ground_marking_mapping =
+    this->declare_parameter<bool>("ground_mapping_enable_ground_marking_mapping", false);
   parameters_->ground_marking_map_topic =
     this->declare_parameter<std::string>("ground_marking_map_topic", "ground_markings_map");
-  parameters_->ground_marking_map_resolution =
-    this->declare_parameter<double>("ground_marking_map_resolution", 0.02);
-  parameters_->ground_marking_map_padding =
-    this->declare_parameter<int>("ground_marking_map_padding", 2);
+  parameters_->ground_texture_map_topic =
+    this->declare_parameter<std::string>("ground_texture_map_topic", "ground_texture_map");
+  parameters_->ground_texture_coverage_topic = this->declare_parameter<std::string>(
+    "ground_texture_coverage_topic", "ground_texture_coverage");
+  parameters_->ground_map_resolution =
+    this->declare_parameter<double>("ground_map_resolution", 0.02);
+  parameters_->ground_map_padding = this->declare_parameter<int>("ground_map_padding", 2);
   parameters_->ground_marking_white_threshold =
     this->declare_parameter<int>("ground_marking_white_threshold", 200);
 
@@ -191,6 +197,10 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   occupancy_grid_publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("map", 10);
   ground_marking_grid_publisher_ =
     this->create_publisher<nav_msgs::msg::OccupancyGrid>(parameters_->ground_marking_map_topic, 10);
+  ground_texture_image_publisher_ =
+    this->create_publisher<sensor_msgs::msg::Image>(parameters_->ground_texture_map_topic, 10);
+  ground_texture_coverage_publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(
+    parameters_->ground_texture_coverage_topic, 10);
   ground_debug_cloud_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
     parameters_->ground_debug_cloud_topic, 10);
   ground_debug_marker_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
@@ -341,12 +351,14 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.ground_extraction_max_distance = parameter.as_double();
     } else if (name == "ground_extraction_distance_threshold") {
       updated.ground_extraction_distance_threshold = parameter.as_double();
-    } else if (name == "ground_marking_map_enable") {
-      updated.ground_marking_map_enable = parameter.as_bool();
-    } else if (name == "ground_marking_map_resolution") {
-      updated.ground_marking_map_resolution = parameter.as_double();
-    } else if (name == "ground_marking_map_padding") {
-      updated.ground_marking_map_padding = static_cast<int>(parameter.as_int());
+    } else if (name == "ground_mapping_enable_texture_mapping") {
+      updated.ground_mapping_enable_texture_mapping = parameter.as_bool();
+    } else if (name == "ground_mapping_enable_ground_marking_mapping") {
+      updated.ground_mapping_enable_ground_marking_mapping = parameter.as_bool();
+    } else if (name == "ground_map_resolution") {
+      updated.ground_map_resolution = parameter.as_double();
+    } else if (name == "ground_map_padding") {
+      updated.ground_map_padding = static_cast<int>(parameter.as_int());
     } else if (name == "ground_marking_white_threshold") {
       updated.ground_marking_white_threshold = static_cast<int>(parameter.as_int());
     } else if (name == "loop_debug_enable") {
@@ -515,7 +527,7 @@ void Ros2SlamWrapper::ScanRGBDCallback(
 
   publishGraph(keyframes, slam_system_->getLoopClosures());
   publishOccupancyGrid(scans_transformed, rclcpp::Time(scan_msg->header.stamp));
-  publishGroundMarkingGrid(rclcpp::Time(scan_msg->header.stamp));
+  publishGroundMap(rclcpp::Time(scan_msg->header.stamp));
   publishDebugImage(rclcpp::Time(scan_msg->header.stamp));
 
   if (parameters_->ground_debug_enable) {
@@ -571,7 +583,7 @@ void Ros2SlamWrapper::publishGroundDebug(
   const glidar_slam::core::GroundPlaneObservation & observation, const rclcpp::Time & stamp) const
 {
   sensor_msgs::msg::PointCloud2 cloud_msg;
-  pcl::toROSMsg(observation.binary_ground_cloud, cloud_msg);
+  pcl::toROSMsg(observation.ground_cloud, cloud_msg);
   cloud_msg.header.stamp = stamp;
   cloud_msg.header.frame_id = parameters_->base_frame;
   ground_debug_cloud_publisher_->publish(cloud_msg);
@@ -651,7 +663,7 @@ void Ros2SlamWrapper::publishGroundDebugImage(
 
   const Eigen::Affine3f camera_from_base = base_from_camera.inverse();
 
-  for (const auto & point : observation.binary_ground_cloud) {
+  for (const auto & point : observation.ground_cloud) {
     const Eigen::Vector3f point_in_camera =
       camera_from_base * Eigen::Vector3f(point.x, point.y, point.z);
     if (!point_in_camera.allFinite() || point_in_camera.z() <= 0.0F) {
@@ -905,19 +917,41 @@ void Ros2SlamWrapper::publishOccupancyGrid(
   occupancy_grid_publisher_->publish(occupancy_grid_msg);
 }
 
-void Ros2SlamWrapper::publishGroundMarkingGrid(const rclcpp::Time & stamp)
+void Ros2SlamWrapper::publishGroundMap(const rclcpp::Time & stamp)
 {
-  if (!parameters_->ground_marking_map_enable) {
+  if (
+    !parameters_->ground_mapping_enable_texture_mapping &&
+    !parameters_->ground_mapping_enable_ground_marking_mapping) {
     return;
   }
 
-  const auto ground_clouds = slam_system_->getTransformedGroundMarkingClouds();
-  if (!ground_marking_grid_->buildFromGroundClouds(ground_clouds)) {
-    return;
+  const auto ground_clouds = slam_system_->getTransformedGroundClouds();
+  if (parameters_->ground_mapping_enable_texture_mapping) {
+    if (ground_texture_grid_->buildFromGroundClouds(ground_clouds)) {
+      ground_texture_image_publisher_->publish(
+        Utils::toRosImage(*ground_texture_grid_, parameters_->map_frame, stamp));
+      ground_texture_coverage_publisher_->publish(
+        Utils::toCoverageMessage(*ground_texture_grid_, parameters_->map_frame, stamp));
+    } else {
+      sensor_msgs::msg::Image empty_image;
+      empty_image.header.stamp = stamp;
+      empty_image.header.frame_id = parameters_->map_frame;
+      empty_image.encoding = "rgb8";
+      ground_texture_image_publisher_->publish(empty_image);
+
+      nav_msgs::msg::OccupancyGrid empty_coverage;
+      empty_coverage.header = empty_image.header;
+      empty_coverage.info.origin.orientation.w = 1.0;
+      ground_texture_coverage_publisher_->publish(empty_coverage);
+    }
   }
 
-  ground_marking_grid_publisher_->publish(
-    Utils::toRosMessage(*ground_marking_grid_, parameters_->map_frame, stamp));
+  if (
+    parameters_->ground_mapping_enable_ground_marking_mapping &&
+    ground_marking_grid_->buildFromGroundClouds(ground_clouds)) {
+    ground_marking_grid_publisher_->publish(
+      Utils::toRosMessage(*ground_marking_grid_, parameters_->map_frame, stamp));
+  }
 }
 
 void Ros2SlamWrapper::publishMapToOdom()

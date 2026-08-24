@@ -58,10 +58,13 @@ glidar_slam:
     # Distance threshold to declare inlies during ground plane fitting. 
     # The method uses the MSCA method which is more robust against noise, so this value can be relatively large
     ground_extraction_distance_threshold: 0.1
-    ground_marking_map_enable: true
+    ground_mapping_enable_texture_mapping: true
+    ground_mapping_enable_ground_marking_mapping: true
     ground_marking_map_topic: ground_markings_map
-    ground_marking_map_resolution: 0.02
-    ground_marking_map_padding: 2
+    ground_texture_map_topic: ground_texture_map
+    ground_texture_coverage_topic: ground_texture_coverage
+    ground_map_resolution: 0.02
+    ground_map_padding: 2
     # Adaptive-threshold pixels at or above this value are treated as white markings.
     ground_marking_white_threshold: 200
 

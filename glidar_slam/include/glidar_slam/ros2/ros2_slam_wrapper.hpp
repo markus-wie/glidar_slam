@@ -10,6 +10,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "glidar_slam/core/ground_marking_grid.hpp"
+#include "glidar_slam/core/ground_texture_grid.hpp"
 #include "glidar_slam/core/occupancy_grid.hpp"
 #include "glidar_slam/core/parameters.hpp"
 #include "glidar_slam/core/system.hpp"
@@ -63,7 +64,7 @@ private:
   void publishOccupancyGrid(
     const std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> & scans_transformed,
     const rclcpp::Time & stamp);
-  void publishGroundMarkingGrid(const rclcpp::Time & stamp);
+  void publishGroundMap(const rclcpp::Time & stamp);
   void publishGroundDebug(
     const glidar_slam::core::GroundPlaneObservation & observation,
     const rclcpp::Time & stamp) const;
@@ -114,6 +115,7 @@ private:
   std::unique_ptr<SlamSystem> slam_system_;
   std::unique_ptr<OccupancyGrid> occ_grid_;
   std::unique_ptr<glidar_slam::core::GroundMarkingGrid> ground_marking_grid_;
+  std::unique_ptr<glidar_slam::core::GroundTextureGrid> ground_texture_grid_;
 
   // ROS2 interfaces
   // TF2
@@ -143,6 +145,8 @@ private:
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_array_publisher_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr occupancy_grid_publisher_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr ground_marking_grid_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr ground_texture_image_publisher_;
+  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr ground_texture_coverage_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_debug_cloud_publisher_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr ground_debug_marker_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr ground_debug_image_publisher_;

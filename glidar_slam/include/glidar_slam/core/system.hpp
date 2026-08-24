@@ -37,7 +37,7 @@ public:
 
   PointCloudXYZ getMapCloud() const;
   std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> getTransformedKeyFrameScans() const;
-  std::vector<pcl::PointCloud<pcl::PointXYZRGB>> getTransformedGroundMarkingClouds() const;
+  std::vector<pcl::PointCloud<pcl::PointXYZRGBA>> getTransformedGroundClouds() const;
 
   std::vector<std::shared_ptr<const KeyFrame>> getKeyFrames() const;
   std::vector<std::pair<uint64_t, uint64_t>> getLoopClosures() const;

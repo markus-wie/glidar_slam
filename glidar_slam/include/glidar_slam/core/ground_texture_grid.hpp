@@ -11,10 +11,10 @@
 
 namespace glidar_slam::core {
 
-class GroundMarkingGrid
+class GroundTextureGrid
 {
 public:
-  explicit GroundMarkingGrid(const std::shared_ptr<Parameters> & parameters);
+  explicit GroundTextureGrid(const std::shared_ptr<Parameters> & parameters);
 
   bool buildFromGroundClouds(const std::vector<pcl::PointCloud<pcl::PointXYZRGBA>> & clouds);
 
@@ -22,16 +22,21 @@ public:
   {
     return info_;
   }
-  const std::vector<int8_t> & getData() const
+
+  const std::vector<std::uint8_t> & getRgbData() const
   {
-    return data_;
+    return rgb_data_;
+  }
+
+  const std::vector<std::int8_t> & getCoverageData() const
+  {
+    return coverage_data_;
   }
 
 private:
-  bool isWhiteMarking(const pcl::PointXYZRGBA & point) const;
-
   OccupancyGrid::Info info_;
-  std::vector<int8_t> data_;
+  std::vector<std::uint8_t> rgb_data_;
+  std::vector<std::int8_t> coverage_data_;
   std::shared_ptr<Parameters> parameters_;
 };
 

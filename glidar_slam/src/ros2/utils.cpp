@@ -47,4 +47,39 @@ nav_msgs::msg::OccupancyGrid Utils::toRosMessage(
 {
   return glidar_slam::ros2::toRosMessage(core_grid, frame_id, stamp);
 }
+
+sensor_msgs::msg::Image Utils::toRosImage(
+  const glidar_slam::core::GroundTextureGrid & core_grid, const std::string & frame_id,
+  const rclcpp::Time & stamp)
+{
+  sensor_msgs::msg::Image msg;
+  const auto & info = core_grid.getInfo();
+  msg.header.stamp = stamp;
+  msg.header.frame_id = frame_id;
+  msg.height = info.height;
+  msg.width = info.width;
+  msg.encoding = "rgb8";
+  msg.is_bigendian = false;
+  msg.step = info.width * 3U;
+  msg.data = core_grid.getRgbData();
+  return msg;
+}
+
+nav_msgs::msg::OccupancyGrid Utils::toCoverageMessage(
+  const glidar_slam::core::GroundTextureGrid & core_grid, const std::string & frame_id,
+  const rclcpp::Time & stamp)
+{
+  nav_msgs::msg::OccupancyGrid msg;
+  const auto & info = core_grid.getInfo();
+  msg.header.stamp = stamp;
+  msg.header.frame_id = frame_id;
+  msg.info.resolution = static_cast<float>(info.resolution);
+  msg.info.width = info.width;
+  msg.info.height = info.height;
+  msg.info.origin.position.x = info.origin_x;
+  msg.info.origin.position.y = info.origin_y;
+  msg.info.origin.orientation.w = 1.0;
+  msg.data = core_grid.getCoverageData();
+  return msg;
+}
 }  // namespace glidar_slam::ros2

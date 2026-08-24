@@ -20,7 +20,8 @@ struct GroundPlaneObservation
   float distance_to_base{0.0F};
   std::size_t point_count{0};
   std::size_t inlier_count{0};
-  pcl::PointCloud<pcl::PointXYZRGB> binary_ground_cloud;
+  // Original camera colors with the binarized lane-marking evidence in alpha.
+  pcl::PointCloud<pcl::PointXYZRGBA> ground_cloud;
 };
 
 class GroundPlaneExtractor

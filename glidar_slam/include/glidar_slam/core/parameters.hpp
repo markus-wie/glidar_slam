@@ -64,10 +64,13 @@ struct Parameters
   double ground_extraction_voxel_size{0.05};
   double ground_extraction_max_distance{5.0};
   double ground_extraction_distance_threshold{0.05};
-  bool ground_marking_map_enable{true};
+  bool ground_mapping_enable_texture_mapping{true};
+  bool ground_mapping_enable_ground_marking_mapping{false};
   std::string ground_marking_map_topic{"ground_markings_map"};
-  double ground_marking_map_resolution{0.02};
-  int ground_marking_map_padding{2};
+  std::string ground_texture_map_topic{"ground_texture_map"};
+  std::string ground_texture_coverage_topic{"ground_texture_coverage"};
+  double ground_map_resolution{0.02};
+  int ground_map_padding{2};
   int ground_marking_white_threshold{200};
 
   // Correlative Scan Matcher Parameters
@@ -152,10 +155,15 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  ground_extraction_max_distance: " << p.ground_extraction_max_distance << ",\n"
      << "  ground_extraction_distance_threshold: " << p.ground_extraction_distance_threshold
      << ",\n"
-     << "  ground_marking_map_enable: " << (p.ground_marking_map_enable ? "true" : "false") << ",\n"
+     << "  ground_mapping_enable_texture_mapping: "
+     << (p.ground_mapping_enable_texture_mapping ? "true" : "false") << ",\n"
+     << "  ground_mapping_enable_ground_marking_mapping: "
+     << (p.ground_mapping_enable_ground_marking_mapping ? "true" : "false") << ",\n"
      << "  ground_marking_map_topic: " << p.ground_marking_map_topic << ",\n"
-     << "  ground_marking_map_resolution: " << p.ground_marking_map_resolution << ",\n"
-     << "  ground_marking_map_padding: " << p.ground_marking_map_padding << ",\n"
+     << "  ground_texture_map_topic: " << p.ground_texture_map_topic << ",\n"
+     << "  ground_texture_coverage_topic: " << p.ground_texture_coverage_topic << ",\n"
+     << "  ground_map_resolution: " << p.ground_map_resolution << ",\n"
+     << "  ground_map_padding: " << p.ground_map_padding << ",\n"
      << "  ground_marking_white_threshold: " << p.ground_marking_white_threshold << ",\n"
      << "  csm_debug_enable: " << (p.csm_debug_enable ? "true" : "false") << ",\n"
      << "  csm_smear_deviation: " << p.csm_smear_deviation << ",\n"

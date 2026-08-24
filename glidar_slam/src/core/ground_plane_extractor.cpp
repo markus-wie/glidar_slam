@@ -45,8 +45,8 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
   }
 
   cv::Mat grayscale;
-  cv::cvtColor(bgr_image, grayscale, cv::COLOR_BGR2GRAY);
   cv::Mat binary;
+  cv::cvtColor(bgr_image, grayscale, cv::COLOR_BGR2GRAY);
   cv::adaptiveThreshold(
     grayscale, binary, 255, cv::ADAPTIVE_THRESH_MEAN_C, cv::THRESH_BINARY, 101, -65.0);
 
@@ -58,10 +58,10 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
   const int first_row = static_cast<int>(std::floor(roi_ratios[2] * depth_image.rows));
   const int last_row = static_cast<int>(std::ceil((1.0F - roi_ratios[3]) * depth_image.rows));
 
-  pcl::PointCloud<pcl::PointXYZRGB> cloud;
+  pcl::PointCloud<pcl::PointXYZRGBA> cloud;
   cloud.reserve(
-    ((last_row - first_row) / parameters.ground_extraction_pixel_stride) *
-    ((last_col - first_col) / parameters.ground_extraction_pixel_stride));
+    static_cast<std::size_t>((last_row - first_row) / parameters.ground_extraction_pixel_stride) *
+    static_cast<std::size_t>((last_col - first_col) / parameters.ground_extraction_pixel_stride));
 
   for (int row = first_row; row < last_row; row += parameters.ground_extraction_pixel_stride) {
     for (int col = first_col; col < last_col; col += parameters.ground_extraction_pixel_stride) {
@@ -83,15 +83,15 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
 
       const Eigen::Vector3f point_in_camera(x, y, z);
       const Eigen::Vector3f point_in_base = base_from_camera * point_in_camera;
-      const std::uint8_t value = binary.at<std::uint8_t>(row, col);
-
-      pcl::PointXYZRGB point;
+      pcl::PointXYZRGBA point;
       point.x = point_in_base.x();
       point.y = point_in_base.y();
       point.z = point_in_base.z();
-      point.r = value;
-      point.g = value;
-      point.b = value;
+      const cv::Vec3b & color = bgr_image.at<cv::Vec3b>(row, col);
+      point.r = color[2];
+      point.g = color[1];
+      point.b = color[0];
+      point.a = binary.at<std::uint8_t>(row, col);
       cloud.push_back(point);
     }
   }
@@ -100,11 +100,11 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
     return reject("no point were able to be extracted");
   }
 
-  pcl::PointCloud<pcl::PointXYZRGB>::Ptr filtered_cloud = cloud.makeShared();
+  pcl::PointCloud<pcl::PointXYZRGBA>::Ptr filtered_cloud = cloud.makeShared();
 
-  pcl::PointCloud<pcl::PointXYZRGB>::Ptr voxelized_cloud =
-    std::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
-  pcl::VoxelGrid<pcl::PointXYZRGB> voxel_filter;
+  pcl::PointCloud<pcl::PointXYZRGBA>::Ptr voxelized_cloud =
+    std::make_shared<pcl::PointCloud<pcl::PointXYZRGBA>>();
+  pcl::VoxelGrid<pcl::PointXYZRGBA> voxel_filter;
   voxel_filter.setInputCloud(filtered_cloud);
   voxel_filter.setLeafSize(
     static_cast<float>(parameters.ground_extraction_voxel_size),
@@ -114,7 +114,7 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
 
   // Standard Ransac using constrained perpendicular plane. Needs fine tuning of the distance
   // threshold
-  pcl::SACSegmentation<pcl::PointXYZRGB> segmentation;
+  pcl::SACSegmentation<pcl::PointXYZRGBA> segmentation;
   segmentation.setOptimizeCoefficients(true);
   segmentation.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
   segmentation.setMethodType(pcl::SAC_MSAC);
@@ -151,11 +151,10 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
   observation.distance_to_base = distance;
   observation.point_count = voxelized_cloud->size();
   observation.inlier_count = inliers.indices.size();
-  pcl::copyPointCloud(*voxelized_cloud, inliers.indices, observation.binary_ground_cloud);
-  observation.binary_ground_cloud.width =
-    static_cast<std::uint32_t>(observation.binary_ground_cloud.size());
-  observation.binary_ground_cloud.height = 1;
-  observation.binary_ground_cloud.is_dense = true;
+  pcl::copyPointCloud(*voxelized_cloud, inliers.indices, observation.ground_cloud);
+  observation.ground_cloud.width = static_cast<std::uint32_t>(observation.ground_cloud.size());
+  observation.ground_cloud.height = 1;
+  observation.ground_cloud.is_dense = true;
   return observation;
 }
 

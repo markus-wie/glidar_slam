@@ -446,14 +446,14 @@ std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> SlamSystem::getTransformedKe
   return out;
 }
 
-std::vector<pcl::PointCloud<pcl::PointXYZRGB>> SlamSystem::getTransformedGroundMarkingClouds() const
+std::vector<pcl::PointCloud<pcl::PointXYZRGBA>> SlamSystem::getTransformedGroundClouds() const
 {
-  std::vector<pcl::PointCloud<pcl::PointXYZRGB>> clouds;
+  std::vector<pcl::PointCloud<pcl::PointXYZRGBA>> clouds;
 
   for (const std::shared_ptr<const KeyFrame> & keyframe : map_database_->getAllKeyFrames()) {
     if (
       !keyframe->ground_observation.has_value() ||
-      keyframe->ground_observation->binary_ground_cloud.empty()) {
+      keyframe->ground_observation->ground_cloud.empty()) {
       continue;
     }
 
@@ -468,9 +468,9 @@ std::vector<pcl::PointCloud<pcl::PointXYZRGB>> SlamSystem::getTransformedGroundM
         static_cast<float>(translation.z())) *
       yaw_angle * pitch_angle * roll_angle;
 
-    pcl::PointCloud<pcl::PointXYZRGB> transformed_cloud;
+    pcl::PointCloud<pcl::PointXYZRGBA> transformed_cloud;
     pcl::transformPointCloud(
-      keyframe->ground_observation->binary_ground_cloud, transformed_cloud, transform);
+      keyframe->ground_observation->ground_cloud, transformed_cloud, transform);
     clouds.push_back(std::move(transformed_cloud));
   }
 
