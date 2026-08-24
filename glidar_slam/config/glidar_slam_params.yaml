@@ -1,0 +1,57 @@
+glidar_slam:
+  ros__parameters:
+
+    # Coordinate Frame Parameters
+    odom_frame: odom
+    map_frame: map
+    scan_frame: laser
+    base_frame: base_link
+    
+    # ROS Topic Parameters
+    scan_topic: /scan
+    tf_topic: /tf
+    odom_topic: /odometry/filtered
+    csm_debug_low_topic: glidar_slam/debug/csm_likelihood_low
+    csm_debug_high_topic: glidar_slam/debug/csm_likelihood_high
+
+    # Odometry Covariance Override
+    # [x, y, z, roll, pitch, yaw]
+    odom_covariance_diagonal: [1.5, 0.5, 1.0e-5, 1.0e-5, 1.0e-5, 0.5]
+
+    # General Parameters
+    minimum_travel_distance: 0.4
+    minimum_travel_heading: 0.4
+    enable_csm_debug_images: true
+
+    # Occupancy Grid Parameters
+    occ_map_resolution: 0.05
+    occ_map_padding: 2
+
+    # Submap Parameters
+    submap_window_size: 5
+    
+    #### Correlative Scan Matcher Parameters
+    csm_smear_deviation: 0.1
+    csm_use_penalty: false
+    csm_distance_variance_penalty: 0.5
+    csm_angle_variance_penalty: 1.0
+    csm_minimum_distance_penalty: 0.5
+    csm_minimum_angle_penalty: 0.9
+
+    #### Cascading CSM stages. Windows denote the width of the area around the previous stage result
+    # Search resolutions [m] for each stage
+    csm_stage_resolutions: [0.05, 0.02, 0.01]
+
+    # Search window widths [m] for each stage
+    csm_stage_translation_steps: [0.1, 0.01, 0.001]
+    csm_stage_window_x: [1.0, 0.15, 0.015]
+    csm_stage_window_y: [1.0, 0.15, 0.015]
+
+    # Search window widths [rad] for each stage
+    csm_stage_angular_steps: [0.1, 0.01, 0.001]
+    csm_stage_window_yaw: [1.0, 0.15, 0.015]
+
+    # iSAM 2 Parameters
+    isam_relinearizeThreshold: 0.1
+    isam_relinearizeSkip: 10
+      
