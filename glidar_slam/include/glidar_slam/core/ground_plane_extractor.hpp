@@ -22,6 +22,7 @@ struct GroundPlaneObservation
   std::size_t inlier_count{0};
   // Original camera colors with the binarized lane-marking evidence in alpha.
   pcl::PointCloud<pcl::PointXYZRGBA> ground_cloud;
+  pcl::PointCloud<pcl::PointXYZ> pcl;
 };
 
 class GroundPlaneExtractor
@@ -31,9 +32,6 @@ public:
     const cv::Mat & bgr_image, const cv::Mat & depth_image, const CameraIntrinsics & intrinsics,
     const Eigen::Affine3f & base_from_camera, const Parameters & parameters,
     std::string * failure_reason = nullptr);
-
-private:
-  static float depthAtMeters(const cv::Mat & depth_image, int row, int col);
 };
 
 }  // namespace glidar_slam::core

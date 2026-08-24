@@ -26,14 +26,14 @@ glidar_slam:
     minimum_travel_distance: 0.4
     minimum_travel_heading: 0.4
     # Timing diagnostics for the SLAM pipeline and loop-closure worker.
-    debug_timings: false
+    debug_timings: true
 
     # Occupancy Grid Parameters
     occ_map_resolution: 0.05
     occ_map_padding: 2
 
     # Submap Parameters
-    submap_window_size: 5
+    submap_window_size: 20
 
     # Ground Observation Parameters
     ground_debug_enable: false
@@ -51,8 +51,8 @@ glidar_slam:
     # [left, right, top, bottom] fractions omitted before RGB-D ground extraction.
     ground_roi_ratios: "0.0 0.0 0.2 0.4"
 
-    ground_extraction_pixel_stride: 2
-    ground_extraction_voxel_size: 0.02
+    ground_extraction_pixel_stride: 8
+    ground_extraction_voxel_size: 0.1
     # The max 
     ground_extraction_max_distance: 3.0
     # Distance threshold to declare inlies during ground plane fitting. 
@@ -98,7 +98,7 @@ glidar_slam:
     loop_maximum_consistency_error: 0.5
     
     #### Correlative Scan Matcher Parameters
-    csm_debug_enable: false
+    csm_debug_enable: true
     csm_smear_deviation: 0.1
     # Uses a linear-time Euclidean distance transform instead of point-wise Gaussian splatting.
     csm_use_distance_transform: false
@@ -119,12 +119,11 @@ glidar_slam:
 
     # Search window widths [m] for each stage
     csm_stage_translation_steps: [0.1, 0.01, 0.001]
-    csm_stage_window_x: [1.0, 0.15, 0.015]
-    csm_stage_window_y: [1.0, 0.15, 0.015]
-
+    csm_stage_window_x: [1.0, 0.06, 0.006]
+    csm_stage_window_y: [1.0, 0.06, 0.006]
     # Search window widths [rad] for each stage
     csm_stage_angular_steps: [0.1, 0.01, 0.001]
-    csm_stage_window_yaw: [1.0, 0.15, 0.015]
+    csm_stage_window_yaw: [1.0, 0.06, 0.006]
 
     # iSAM 2 Parameters
     isam_relinearizeThreshold: 0.1
