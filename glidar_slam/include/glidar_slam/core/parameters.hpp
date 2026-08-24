@@ -72,11 +72,11 @@ struct Parameters
 
   // Correlative Scan Matcher Parameters
   double csm_smear_deviation{0.1};
+  bool csm_use_distance_transform{false};
+  bool csm_use_tbb{false};
   bool csm_use_penalty{true};
-  double csm_distance_variance_penalty{0.5};
-  double csm_angle_variance_penalty{1.0};
-  double csm_minimum_distance_penalty{0.5};
-  double csm_minimum_angle_penalty{0.9};
+  double csm_distance_penalty_std_dev{0.5};
+  double csm_angle_penalty_std_dev{1.0};
   std::vector<CsmSearchStage> csm_search_stages;
   bool csm_debug_enable{false};
 
@@ -159,11 +159,12 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  ground_marking_white_threshold: " << p.ground_marking_white_threshold << ",\n"
      << "  csm_debug_enable: " << (p.csm_debug_enable ? "true" : "false") << ",\n"
      << "  csm_smear_deviation: " << p.csm_smear_deviation << ",\n"
+     << "  csm_use_distance_transform: " << (p.csm_use_distance_transform ? "true" : "false")
+     << ",\n"
+     << "  csm_use_tbb: " << (p.csm_use_tbb ? "true" : "false") << ",\n"
      << "  csm_use_penalty: " << (p.csm_use_penalty ? "true" : "false") << ",\n"
-     << "  csm_distance_variance_penalty: " << p.csm_distance_variance_penalty << ",\n"
-     << "  csm_angle_variance_penalty: " << p.csm_angle_variance_penalty << ",\n"
-     << "  csm_minimum_distance_penalty: " << p.csm_minimum_distance_penalty << ",\n"
-     << "  csm_minimum_angle_penalty: " << p.csm_minimum_angle_penalty << ",\n"
+     << "  csm_distance_penalty_std_dev: " << p.csm_distance_penalty_std_dev << ",\n"
+     << "  csm_angle_penalty_std_dev: " << p.csm_angle_penalty_std_dev << ",\n"
      << "  csm_search_stages (size): " << p.csm_search_stages.size() << ",\n"
      << "  loop_debug_enable: " << (p.loop_debug_enable ? "true" : "false") << ",\n"
      << "  loop_input_queue_capacity: " << p.loop_input_queue_capacity << ",\n"

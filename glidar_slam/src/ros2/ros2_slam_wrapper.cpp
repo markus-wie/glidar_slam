@@ -264,27 +264,21 @@ void Ros2SlamWrapper::processCSMParameters()
   }
 
   parameters_->csm_smear_deviation = this->declare_parameter<double>("csm_smear_deviation", 0.1);
+  parameters_->csm_use_distance_transform =
+    this->declare_parameter<bool>("csm_use_distance_transform", false);
+  parameters_->csm_use_tbb = this->declare_parameter<bool>("csm_use_tbb", false);
   parameters_->csm_use_penalty = this->declare_parameter<bool>("csm_use_penalty", true);
-  parameters_->csm_distance_variance_penalty =
-    this->declare_parameter<double>("csm_distance_variance_penalty", 0.5);
-  parameters_->csm_angle_variance_penalty =
-    this->declare_parameter<double>("csm_angle_variance_penalty", 1.0);
-  parameters_->csm_minimum_distance_penalty =
-    this->declare_parameter<double>("csm_minimum_distance_penalty", 0.5);
-  parameters_->csm_minimum_angle_penalty =
-    this->declare_parameter<double>("csm_minimum_angle_penalty", 0.9);
+  parameters_->csm_distance_penalty_std_dev =
+    this->declare_parameter<double>("csm_distance_penalty_std_dev", 0.5);
+  parameters_->csm_angle_penalty_std_dev =
+    this->declare_parameter<double>("csm_angle_penalty_std_dev", 1.0);
 
   if (
     !std::isfinite(parameters_->csm_smear_deviation) || parameters_->csm_smear_deviation <= 0.0 ||
-    !std::isfinite(parameters_->csm_distance_variance_penalty) ||
-    parameters_->csm_distance_variance_penalty <= 0.0 ||
-    !std::isfinite(parameters_->csm_angle_variance_penalty) ||
-    parameters_->csm_angle_variance_penalty <= 0.0 ||
-    !std::isfinite(parameters_->csm_minimum_distance_penalty) ||
-    parameters_->csm_minimum_distance_penalty < 0.0 ||
-    parameters_->csm_minimum_distance_penalty > 1.0 ||
-    !std::isfinite(parameters_->csm_minimum_angle_penalty) ||
-    parameters_->csm_minimum_angle_penalty < 0.0 || parameters_->csm_minimum_angle_penalty > 1.0) {
+    !std::isfinite(parameters_->csm_distance_penalty_std_dev) ||
+    parameters_->csm_distance_penalty_std_dev <= 0.0 ||
+    !std::isfinite(parameters_->csm_angle_penalty_std_dev) ||
+    parameters_->csm_angle_penalty_std_dev <= 0.0) {
     throw std::runtime_error("CSM penalty parameters are outside their valid ranges");
   }
 }
@@ -375,16 +369,16 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.csm_debug_enable = parameter.as_bool();
     } else if (name == "csm_smear_deviation") {
       updated.csm_smear_deviation = parameter.as_double();
+    } else if (name == "csm_use_distance_transform") {
+      updated.csm_use_distance_transform = parameter.as_bool();
+    } else if (name == "csm_use_tbb") {
+      updated.csm_use_tbb = parameter.as_bool();
     } else if (name == "csm_use_penalty") {
       updated.csm_use_penalty = parameter.as_bool();
-    } else if (name == "csm_distance_variance_penalty") {
-      updated.csm_distance_variance_penalty = parameter.as_double();
-    } else if (name == "csm_angle_variance_penalty") {
-      updated.csm_angle_variance_penalty = parameter.as_double();
-    } else if (name == "csm_minimum_distance_penalty") {
-      updated.csm_minimum_distance_penalty = parameter.as_double();
-    } else if (name == "csm_minimum_angle_penalty") {
-      updated.csm_minimum_angle_penalty = parameter.as_double();
+    } else if (name == "csm_distance_penalty_std_dev") {
+      updated.csm_distance_penalty_std_dev = parameter.as_double();
+    } else if (name == "csm_angle_penalty_std_dev") {
+      updated.csm_angle_penalty_std_dev = parameter.as_double();
     }
   }
 

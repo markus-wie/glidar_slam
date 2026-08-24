@@ -21,6 +21,7 @@ find_package(PCL REQUIRED COMPONENTS common registration segmentation)
 find_package(pcl_conversions REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(nanoflann REQUIRED)
+find_package(TBB REQUIRED)
 
 include_directories(include)
 
@@ -72,6 +73,8 @@ target_link_libraries(${PROJECT_NAME}_core
   nanoflann::nanoflann
   ${OpenCV_LIBS}
 )
+
+target_link_libraries(${PROJECT_NAME}_core TBB::tbb)
 
 add_library(${PROJECT_NAME}_ros2 SHARED
   src/ros2/ros2_slam_wrapper.cpp

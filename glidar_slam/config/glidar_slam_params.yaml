@@ -86,11 +86,17 @@ glidar_slam:
     #### Correlative Scan Matcher Parameters
     csm_debug_enable: false
     csm_smear_deviation: 0.1
+    # Uses a linear-time Euclidean distance transform instead of point-wise Gaussian splatting.
+    csm_use_distance_transform: false
+    # Uses TBB for parallel candidate evaluation when TBB is available at build time.
+    csm_use_tbb: true
+    # Additional penalties for that are being applied to the CMS score by the current deviation from the initial guess
+    # This is a strategy to solve the long corridor problem by trusting the odometry induced guess more than the matcher
+    # They represent the standard deviation of a Gaussian that is applied to the CSM score based on the distance and angle from the initial guess.
+    # The actual penalty is computed as 1 - 0.2 * (delta^2 / std_dev^2), which acts as a flattened first order approximation of a Gaussian kernel
     csm_use_penalty: false
-    csm_distance_variance_penalty: 0.5
-    csm_angle_variance_penalty: 1.0
-    csm_minimum_distance_penalty: 0.5
-    csm_minimum_angle_penalty: 0.9
+    csm_distance_penalty_std_dev: 0.5
+    csm_angle_penalty_std_dev: 0.5
 
     #### Cascading CSM stages. Windows denote the width of the area around the previous stage result
     # Search resolutions [m] for each stage
