@@ -94,13 +94,6 @@ private:
     const std::vector<Point2D> & reference_points,
     const std::vector<CsmSearchStage> & stages) const;
 
-  static bool referencePointsEqual(
-    const std::vector<Point2D> & lhs, const std::vector<Point2D> & rhs);
-
-  static double maximumSearchWindow(const std::vector<CsmSearchStage> & stages);
-
-  static std::vector<double> makeSearchPositions(double center, double window, double step);
-
   SearchResult searchSpace(
     const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & center,
     const CsmSearchStage & stage) const;
@@ -114,9 +107,6 @@ private:
     const Pose2D & center, double angle_penalty) const;
 
   static void selectBestPose(SearchResult & result);
-
-  double evaluatePose(
-    const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & pose) const;
 
   static Eigen::Matrix3d computeCovariance(
     const std::vector<SearchResult> & results, const std::vector<CsmSearchStage> & stages);

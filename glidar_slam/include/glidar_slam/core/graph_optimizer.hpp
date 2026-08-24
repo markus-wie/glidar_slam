@@ -41,10 +41,6 @@ public:
   const gtsam::Values & getCurrentEstimates() const;
 
 private:
-  static gtsam::Pose3 projectPlanar(const gtsam::Pose3 & pose);
-  static gtsam::noiseModel::Gaussian::shared_ptr covarianceFromMatrix(
-    const gtsam::Matrix66 & covariance);
-
   std::shared_ptr<Parameters> params_;
 
   gtsam::ISAM2Params isam_params_;

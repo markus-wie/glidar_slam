@@ -49,14 +49,6 @@ public:
   std::shared_ptr<const GlobalMapSnapshot> getLatestGlobalMap() const;
 
 private:
-  static gtsam::Pose3 projectPlanar(const gtsam::Pose3 & pose);
-  static double translationDistance(const gtsam::Pose3 & lhs, const gtsam::Pose3 & rhs);
-  static double yawDistance(const gtsam::Pose3 & lhs, const gtsam::Pose3 & rhs);
-
-  static void appendVisiblePoints(
-    const PointCloudXYZ & scan, const gtsam::Pose3 & pose, const Point2D & viewpoint,
-    std::vector<Point2D> & output);
-
   bool shouldCreateKeyFrame(const gtsam::Pose3 & current_odom_pose) const;
 
   bool processLoopClosureProposals();

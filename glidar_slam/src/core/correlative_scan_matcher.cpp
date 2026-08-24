@@ -16,6 +16,60 @@
 
 namespace glidar_slam::core {
 
+namespace {
+
+bool sameReferencePoints(const std::vector<Point2D> & lhs, const std::vector<Point2D> & rhs)
+{
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < lhs.size(); ++index) {
+    if (lhs[index].x != rhs[index].x || lhs[index].y != rhs[index].y) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::vector<double> makeSearchPositions(double center, double window, double step)
+{
+  const int sample_count = std::max(1, static_cast<int>(std::ceil(window / step)));
+  const double start = center - window * 0.5;
+  std::vector<double> positions;
+  positions.reserve(static_cast<std::size_t>(sample_count));
+  for (int index = 0; index < sample_count; ++index) {
+    positions.push_back(start + index * step);
+  }
+  return positions;
+}
+
+double evaluatePoseScore(
+  const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & pose)
+{
+  double score = 0.0;
+  const double c = std::cos(pose.yaw);
+  const double s = std::sin(pose.yaw);
+
+  int valid_points = 0;
+  for (const auto & point : points) {
+    const double eval_score =
+      field.getScore(pose.x + c * point.x - s * point.y, pose.y + s * point.x + c * point.y);
+    if (eval_score < 0.0) {
+      continue;
+    }
+    score += eval_score;
+    ++valid_points;
+  }
+
+  if (valid_points == 0) {
+    return -1.0;
+  }
+
+  return score / static_cast<double>(valid_points);
+}
+
+}  // namespace
+
 CorrelativeScanMatcher::CorrelativeScanMatcher(const std::shared_ptr<Parameters> & params)
 : params_(params)
 {
@@ -75,7 +129,7 @@ CsmResult CorrelativeScanMatcher::match(
   }
 
   const auto initial_score_start = std::chrono::steady_clock::now();
-  const double initial_score = evaluatePose(current_points, fields->front(), pose_estimate);
+  const double initial_score = evaluatePoseScore(current_points, fields->front(), pose_estimate);
   Pose2D best_pose = pose_estimate;
   if (params_->debug_timings) {
     const double elapsed_ms = std::chrono::duration<double, std::milli>(
@@ -163,7 +217,7 @@ std::shared_ptr<const std::vector<LikelihoodField>> CorrelativeScanMatcher::getL
   const std::vector<Point2D> & reference_points, const std::vector<CsmSearchStage> & stages) const
 {
   const bool cache_matches =
-    cached_fields_ && referencePointsEqual(cached_reference_points_, reference_points);
+    cached_fields_ && sameReferencePoints(cached_reference_points_, reference_points);
 
   if (cache_matches) {
     return cached_fields_;
@@ -181,29 +235,6 @@ std::shared_ptr<const std::vector<LikelihoodField>> CorrelativeScanMatcher::getL
   return cached_fields_;
 }
 
-bool CorrelativeScanMatcher::referencePointsEqual(
-  const std::vector<Point2D> & lhs, const std::vector<Point2D> & rhs)
-{
-  if (lhs.size() != rhs.size()) {
-    return false;
-  }
-  for (std::size_t index = 0; index < lhs.size(); ++index) {
-    if (lhs[index].x != rhs[index].x || lhs[index].y != rhs[index].y) {
-      return false;
-    }
-  }
-  return true;
-}
-
-double CorrelativeScanMatcher::maximumSearchWindow(const std::vector<CsmSearchStage> & stages)
-{
-  double maximum_window = 0.0;
-  for (const auto & stage : stages) {
-    maximum_window = std::max({maximum_window, stage.window_x * 0.5, stage.window_y * 0.5});
-  }
-  return maximum_window;
-}
-
 LikelihoodField CorrelativeScanMatcher::buildField(
   const std::vector<Point2D> & points, double resolution) const
 {
@@ -216,7 +247,6 @@ LikelihoodField CorrelativeScanMatcher::buildField(
 
   // define the max smear distance by a multiple of the deviation
   const double max_smear_distance = params_->csm_smear_deviation * 2.0;
-  const double max_search_window = maximumSearchWindow(params_->csm_search_stages);
   const double padding = 0;
   const double max_smear_distance_sq = max_smear_distance * max_smear_distance;
 
@@ -342,19 +372,6 @@ CorrelativeScanMatcher::SearchResult CorrelativeScanMatcher::searchSpace(
   return result;
 }
 
-std::vector<double> CorrelativeScanMatcher::makeSearchPositions(
-  double center, double window, double step)
-{
-  const int sample_count = std::max(1, static_cast<int>(std::ceil(window / step)));
-  const double start = center - window * 0.5;
-  std::vector<double> positions;
-  positions.reserve(static_cast<std::size_t>(sample_count));
-  for (int index = 0; index < sample_count; ++index) {
-    positions.push_back(start + index * step);
-  }
-  return positions;
-}
-
 void CorrelativeScanMatcher::evaluateYawSlice(
   const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & center,
   const SearchGrid & grid, std::size_t yaw_index, SearchResult & result) const
@@ -447,32 +464,6 @@ void CorrelativeScanMatcher::selectBestPose(SearchResult & result)
     result.best_pose.y = theta_y / static_cast<double>(theta_count);
     result.best_pose.yaw = std::atan2(theta_sin, theta_cos);
   }
-}
-
-double CorrelativeScanMatcher::evaluatePose(
-  const std::vector<Point2D> & points, const LikelihoodField & field, const Pose2D & pose) const
-{
-  double score = 0.0;
-  double c = std::cos(pose.yaw);
-  double s = std::sin(pose.yaw);
-
-  int valid_points = 0;
-  for (const auto & p : points) {
-    double eval_score = field.getScore(pose.x + c * p.x - s * p.y, pose.y + s * p.x + c * p.y);
-    if (eval_score < 0.0) {
-      continue;
-    }
-    score += eval_score;
-    ++valid_points;
-  }
-
-  if (valid_points == 0) {
-    return -1.0;
-  }
-
-  const double normalized_score = score / static_cast<double>(valid_points);
-
-  return normalized_score;
 }
 
 Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(

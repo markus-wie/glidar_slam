@@ -140,9 +140,11 @@ std::vector<Point2D> GroundMarkingMatcher::filterCurrentPoints(
   const std::vector<Point2D> & reference_points, const std::vector<Point2D> & current_points,
   const Pose2D & relative_pose) const
 {
+  const auto minimum_marking_count = static_cast<std::vector<Point2D>::size_type>(
+    scan_matcher_parameters_->ground_matching_minimum_marking_count);
   if (
-    reference_points.size() < scan_matcher_parameters_->ground_matching_minimum_marking_count ||
-    current_points.size() < scan_matcher_parameters_->ground_matching_minimum_marking_count) {
+    reference_points.size() < minimum_marking_count ||
+    current_points.size() < minimum_marking_count) {
     return {};
   }
 
@@ -189,9 +191,7 @@ std::vector<Point2D> GroundMarkingMatcher::filterCurrentPoints(
   }
 
   // Ensure we still have enough points after cropping
-  if (
-    filtered_current_points.size() <
-    scan_matcher_parameters_->ground_matching_minimum_marking_count) {
+  if (filtered_current_points.size() < minimum_marking_count) {
     return {};
   }
 

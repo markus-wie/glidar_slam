@@ -68,6 +68,83 @@ gtsam::Matrix66 planarOdometryCovariance(const gtsam::Matrix66 & covariance)
   return result;
 }
 
+gtsam::Pose3 makePlanarPose(const gtsam::Pose3 & pose)
+{
+  const gtsam::Vector3 rpy = pose.rotation().rpy();
+  const double yaw = rpy.z();
+  const auto & translation = pose.translation();
+  return Utils::makePlanarPose(translation.x(), translation.y(), yaw);
+}
+
+double computeTranslationDistance(const gtsam::Pose3 & lhs, const gtsam::Pose3 & rhs)
+{
+  const auto delta = lhs.translation() - rhs.translation();
+  return std::hypot(delta.x(), delta.y());
+}
+
+double computeYawDistance(const gtsam::Pose3 & lhs, const gtsam::Pose3 & rhs)
+{
+  const double lhs_yaw = lhs.rotation().rpy().z();
+  const double rhs_yaw = rhs.rotation().rpy().z();
+  return std::abs(Utils::normalizeAngle(lhs_yaw - rhs_yaw));
+}
+
+void collectVisiblePoints(
+  const PointCloudXYZ & scan, const gtsam::Pose3 & pose, const Point2D & viewpoint,
+  std::vector<Point2D> & output)
+{
+  const size_t world_points_start = output.size();
+  output.reserve(output.size() + 2 * scan.size());
+  for (const auto & point : scan) {
+    const gtsam::Point3 world_point = pose.transformFrom(gtsam::Point3(point.x, point.y, point.z));
+    if (std::isfinite(world_point.x()) && std::isfinite(world_point.y())) {
+      output.push_back({world_point.x(), world_point.y()});
+    }
+  }
+
+  const size_t world_points_end = output.size();
+  if (world_points_start == world_points_end) {
+    return;
+  }
+
+  // TODO: check what it does exactly. basically voxilization and a trick to filter "ghost" points
+  constexpr double min_square_distance = 0.1 * 0.1;
+  size_t trailing_point = world_points_start;
+  Point2D first_point{};
+  bool first_time = true;
+
+  for (size_t point = world_points_start; point < world_points_end; ++point) {
+    const Point2D current_point = output[point];
+    if (first_time) {
+      first_point = current_point;
+      first_time = false;
+    }
+
+    const double delta_x = first_point.x - current_point.x;
+    const double delta_y = first_point.y - current_point.y;
+    if (delta_x * delta_x + delta_y * delta_y <= min_square_distance) {
+      continue;
+    }
+
+    // Keep only the contiguous side of the scan that faces the matcher viewpoint.
+    const double a = viewpoint.y - first_point.y;
+    const double b = first_point.x - viewpoint.x;
+    const double c = first_point.y * viewpoint.x - first_point.x * viewpoint.y;
+    const double side = current_point.x * a + current_point.y * b + c;
+    first_point = current_point;
+
+    if (side < 0.0) {
+      trailing_point = point;
+      continue;
+    }
+
+    for (size_t segment_point = trailing_point; segment_point < point; ++segment_point) {
+      output.push_back(output[segment_point]);
+    }
+    trailing_point = point;
+  }
+}
+
 }  // namespace
 
 SlamSystem::SlamSystem(const std::shared_ptr<Parameters> & parameters) : parameters_(parameters)
@@ -124,7 +201,7 @@ bool SlamSystem::process(
     loop_proposals_ms = elapsedMilliseconds(loop_proposals_start);
   }
 
-  const gtsam::Pose3 latest_odom_pose = projectPlanar(odom_pose);
+  const gtsam::Pose3 latest_odom_pose = makePlanarPose(odom_pose);
 
   if (map_database_->size() == 0) {
     const gtsam::Pose3 initial_pose = initialPoseFromGroundObservation(ground_observation);
@@ -176,7 +253,7 @@ bool SlamSystem::process(
 
   for (size_t i = start_idx; i < keyframes.size(); ++i) {
     const KeyFrame & kf = *keyframes.at(i);
-    appendVisiblePoints(kf.scan->points(), kf.pose, viewpoint, reference_points);
+    collectVisiblePoints(kf.scan->points(), kf.pose, viewpoint, reference_points);
   }
   if (parameters_->debug_timings) {
     submap_ms = elapsedMilliseconds(submap_start);
@@ -443,61 +520,6 @@ std::optional<PointCloudXYZRGBA> SlamSystem::getLatestGroundMatchingDebug() cons
   return latest_ground_matching_debug_;
 }
 
-void SlamSystem::appendVisiblePoints(
-  const PointCloudXYZ & scan, const gtsam::Pose3 & pose, const Point2D & viewpoint,
-  std::vector<Point2D> & output)
-{
-  const size_t world_points_start = output.size();
-  output.reserve(output.size() + 2 * scan.size());
-  for (const auto & point : scan) {
-    const gtsam::Point3 world_point = pose.transformFrom(gtsam::Point3(point.x, point.y, point.z));
-    if (std::isfinite(world_point.x()) && std::isfinite(world_point.y())) {
-      output.push_back({world_point.x(), world_point.y()});
-    }
-  }
-
-  const size_t world_points_end = output.size();
-  if (world_points_start == world_points_end) {
-    return;
-  }
-
-  constexpr double min_square_distance = 0.1 * 0.1;
-  size_t trailing_point = world_points_start;
-  Point2D first_point{};
-  bool first_time = true;
-
-  for (size_t point = world_points_start; point < world_points_end; ++point) {
-    const Point2D current_point = output[point];
-    if (first_time) {
-      first_point = current_point;
-      first_time = false;
-    }
-
-    const double delta_x = first_point.x - current_point.x;
-    const double delta_y = first_point.y - current_point.y;
-    if (delta_x * delta_x + delta_y * delta_y <= min_square_distance) {
-      continue;
-    }
-
-    // Keep only the contiguous side of the scan that faces the matcher viewpoint.
-    const double a = viewpoint.y - first_point.y;
-    const double b = first_point.x - viewpoint.x;
-    const double c = first_point.y * viewpoint.x - first_point.x * viewpoint.y;
-    const double side = current_point.x * a + current_point.y * b + c;
-    first_point = current_point;
-
-    if (side < 0.0) {
-      trailing_point = point;
-      continue;
-    }
-
-    for (size_t segment_point = trailing_point; segment_point < point; ++segment_point) {
-      output.push_back(output[segment_point]);
-    }
-    trailing_point = point;
-  }
-}
-
 bool SlamSystem::processLoopClosureProposals()
 {
   std::vector<LoopClosureProposal> proposals;
@@ -631,27 +653,6 @@ std::vector<std::pair<uint64_t, uint64_t>> SlamSystem::getLoopClosures() const
   return loop_closures_;
 }
 
-gtsam::Pose3 SlamSystem::projectPlanar(const gtsam::Pose3 & pose)
-{
-  const gtsam::Vector3 rpy = pose.rotation().rpy();
-  const double yaw = rpy.z();
-  const auto & translation = pose.translation();
-  return Utils::makePlanarPose(translation.x(), translation.y(), yaw);
-}
-
-double SlamSystem::translationDistance(const gtsam::Pose3 & lhs, const gtsam::Pose3 & rhs)
-{
-  const auto delta = lhs.translation() - rhs.translation();
-  return std::hypot(delta.x(), delta.y());
-}
-
-double SlamSystem::yawDistance(const gtsam::Pose3 & lhs, const gtsam::Pose3 & rhs)
-{
-  const double lhs_yaw = lhs.rotation().rpy().z();
-  const double rhs_yaw = rhs.rotation().rpy().z();
-  return std::abs(Utils::normalizeAngle(lhs_yaw - rhs_yaw));
-}
-
 bool SlamSystem::shouldCreateKeyFrame(const gtsam::Pose3 & current_odom_pose) const
 {
   const auto & keyframes = map_database_->getAllKeyFrames();
@@ -661,10 +662,10 @@ bool SlamSystem::shouldCreateKeyFrame(const gtsam::Pose3 & current_odom_pose) co
 
   std::shared_ptr<const KeyFrame> reference_keyframe = keyframes.back();
 
-  double trans_dist = translationDistance(reference_keyframe->odom_pose, current_odom_pose);
+  double trans_dist = computeTranslationDistance(reference_keyframe->odom_pose, current_odom_pose);
   bool should_create_trans = trans_dist > parameters_->minimum_travel_distance;
 
-  double yaw_dist = yawDistance(reference_keyframe->odom_pose, current_odom_pose);
+  double yaw_dist = computeYawDistance(reference_keyframe->odom_pose, current_odom_pose);
   bool should_create_rot = yaw_dist > parameters_->minimum_travel_heading;
 
   SAM_DEBUG(

@@ -24,7 +24,7 @@ int cellCoordinate(float value, double resolution)
 }
 
 template <typename Visitor>
-void raytrace(int x0, int y0, int x1, int y1, const Visitor & visitor)
+void raytraceLine(int x0, int y0, int x1, int y1, const Visitor & visitor)
 {
   const int dx = std::abs(x1 - x0);
   const int sx = x0 < x1 ? 1 : -1;
@@ -33,6 +33,7 @@ void raytrace(int x0, int y0, int x1, int y1, const Visitor & visitor)
   int error = dx + dy;
   int x = x0;
   int y = y0;
+
   while (true) {
     if (!visitor(x, y) || (x == x1 && y == y1)) {
       return;
@@ -68,7 +69,7 @@ LocalMapData buildLocalOccupancy(const PointCloudXYZ & scan, double resolution)
     const int target_y = cellCoordinate(point.y, resolution);
     const int origin_x = 0;
     const int origin_y = 0;
-    raytrace(origin_x, origin_y, target_x, target_y, [&](int x, int y) {
+    raytraceLine(origin_x, origin_y, target_x, target_y, [&](int x, int y) {
       if (x == target_x && y == target_y) {
         return false;
       }

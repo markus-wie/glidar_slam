@@ -12,6 +12,34 @@
 
 namespace glidar_slam::core {
 
+namespace {
+
+gtsam::noiseModel::Gaussian::shared_ptr makeCovarianceNoiseModel(const gtsam::Matrix66 & covariance)
+{
+  constexpr double minimum_variance = 1e-8;
+  constexpr double unknown_variance = 1e6;
+
+  if (!covariance.allFinite()) {
+    return gtsam::noiseModel::Gaussian::Covariance(gtsam::Matrix66::Identity() * unknown_variance);
+  }
+
+  gtsam::Matrix66 symmetric = 0.5 * (covariance + covariance.transpose());
+  Eigen::SelfAdjointEigenSolver<gtsam::Matrix66> solver(symmetric);
+  if (solver.info() != Eigen::Success || !solver.eigenvalues().allFinite()) {
+    return gtsam::noiseModel::Gaussian::Covariance(gtsam::Matrix66::Identity() * unknown_variance);
+  }
+  if (solver.eigenvalues().minCoeff() < -minimum_variance) {
+    return gtsam::noiseModel::Gaussian::Covariance(gtsam::Matrix66::Identity() * unknown_variance);
+  }
+
+  const gtsam::Matrix66 sanitized = solver.eigenvectors() *
+                                    solver.eigenvalues().cwiseMax(minimum_variance).asDiagonal() *
+                                    solver.eigenvectors().transpose();
+  return gtsam::noiseModel::Gaussian::Covariance(sanitized);
+}
+
+}  // namespace
+
 GraphOptimizer::GraphOptimizer(const std::shared_ptr<Parameters> & params)
 : params_(params), isam_(isam_params_), latest_key_(0), latest_timestamp_(0), initialized_(false)
 {
@@ -47,7 +75,7 @@ uint64_t GraphOptimizer::addRelativeFactor(
   }
 
   pending_factors_.add(gtsam::BetweenFactor<gtsam::Pose3>(
-    from_key, to_key, relative_pose, covarianceFromMatrix(covariance)));
+    from_key, to_key, relative_pose, makeCovarianceNoiseModel(covariance)));
   if (!pending_values_.exists(to_key) && !current_estimates_.exists(to_key)) {
     const gtsam::Pose3 from_pose = current_estimates_.exists(from_key)
                                      ? current_estimates_.at<gtsam::Pose3>(from_key)
@@ -119,41 +147,6 @@ bool GraphOptimizer::isInitialized() const
 const gtsam::Values & GraphOptimizer::getCurrentEstimates() const
 {
   return current_estimates_;
-}
-
-gtsam::Pose3 GraphOptimizer::projectPlanar(const gtsam::Pose3 & pose)
-{
-  const gtsam::Vector3 rpy = pose.rotation().rpy();
-  const double yaw = rpy.z();
-  const auto & translation = pose.translation();
-  auto planar_pose = gtsam::Pose3(
-    gtsam::Rot3::RzRyRx(0.0, 0.0, yaw), gtsam::Point3(translation.x(), translation.y(), 0.0));
-  return planar_pose;
-}
-
-gtsam::noiseModel::Gaussian::shared_ptr GraphOptimizer::covarianceFromMatrix(
-  const gtsam::Matrix66 & covariance)
-{
-  constexpr double minimum_variance = 1e-8;
-  constexpr double unknown_variance = 1e6;
-
-  if (!covariance.allFinite()) {
-    return gtsam::noiseModel::Gaussian::Covariance(gtsam::Matrix66::Identity() * unknown_variance);
-  }
-
-  gtsam::Matrix66 symmetric = 0.5 * (covariance + covariance.transpose());
-  Eigen::SelfAdjointEigenSolver<gtsam::Matrix66> solver(symmetric);
-  if (solver.info() != Eigen::Success || !solver.eigenvalues().allFinite()) {
-    return gtsam::noiseModel::Gaussian::Covariance(gtsam::Matrix66::Identity() * unknown_variance);
-  }
-  if (solver.eigenvalues().minCoeff() < -minimum_variance) {
-    return gtsam::noiseModel::Gaussian::Covariance(gtsam::Matrix66::Identity() * unknown_variance);
-  }
-
-  const gtsam::Matrix66 sanitized = solver.eigenvectors() *
-                                    solver.eigenvalues().cwiseMax(minimum_variance).asDiagonal() *
-                                    solver.eigenvectors().transpose();
-  return gtsam::noiseModel::Gaussian::Covariance(sanitized);
 }
 
 }  // namespace glidar_slam::core
