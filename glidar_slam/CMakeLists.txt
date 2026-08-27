@@ -30,11 +30,11 @@ add_library(${PROJECT_NAME}_core SHARED
   src/core/graph_optimizer.cpp
   src/core/ground_plane_extractor.cpp
   src/core/ground_plane_factor.cpp
-  src/core/ground_marking_grid.cpp
-  src/core/ground_texture_grid.cpp
+  src/core/global_map/ground_marking_grid.cpp
+  src/core/global_map/ground_texture_grid.cpp
   src/core/loop_closure.cpp
   src/core/system.cpp
-  src/core/occupancy_grid.cpp
+  src/core/global_map/occupancy_grid.cpp
   src/core/map_database.cpp
   src/core/camera_model.cpp
   src/core/laser_scan.cpp

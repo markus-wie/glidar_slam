@@ -9,9 +9,9 @@
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
-#include "glidar_slam/core/ground_marking_grid.hpp"
-#include "glidar_slam/core/ground_texture_grid.hpp"
-#include "glidar_slam/core/occupancy_grid.hpp"
+#include "glidar_slam/core/global_map/ground_marking_grid.hpp"
+#include "glidar_slam/core/global_map/ground_texture_grid.hpp"
+#include "glidar_slam/core/global_map/occupancy_grid.hpp"
 #include "glidar_slam/core/parameters.hpp"
 #include "glidar_slam/core/system.hpp"
 #include "gtsam/geometry/Pose3.h"
@@ -34,10 +34,12 @@
 namespace glidar_slam::ros2 {
 
 using glidar_slam::core::KeyFrame;
-using glidar_slam::core::OccupancyGrid;
 using glidar_slam::core::Parameters;
 using glidar_slam::core::PointCloudXYZ;
 using glidar_slam::core::SlamSystem;
+using glidar_slam::core::global_map::GroundMarkingGrid;
+using glidar_slam::core::global_map::GroundTextureGrid;
+using glidar_slam::core::global_map::OccupancyGrid;
 
 class Ros2SlamWrapper : public rclcpp::Node
 {
@@ -114,8 +116,8 @@ private:
   // Modules
   std::unique_ptr<SlamSystem> slam_system_;
   std::unique_ptr<OccupancyGrid> occ_grid_;
-  std::unique_ptr<glidar_slam::core::GroundMarkingGrid> ground_marking_grid_;
-  std::unique_ptr<glidar_slam::core::GroundTextureGrid> ground_texture_grid_;
+  std::unique_ptr<GroundMarkingGrid> ground_marking_grid_;
+  std::unique_ptr<GroundTextureGrid> ground_texture_grid_;
 
   // ROS2 interfaces
   // TF2

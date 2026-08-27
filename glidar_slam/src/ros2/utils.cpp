@@ -3,30 +3,27 @@
 namespace glidar_slam::ros2 {
 namespace {
 
-template <typename Grid>
-nav_msgs::msg::OccupancyGrid toRosMessage(
-  const Grid & core_grid, const std::string & frame_id, const rclcpp::Time & stamp)
+void setOccupancyGridMetadata(
+  nav_msgs::msg::OccupancyGrid & msg, const glidar_slam::core::GlobalMap::Info & info,
+  const std::string & frame_id, const rclcpp::Time & stamp)
 {
-  nav_msgs::msg::OccupancyGrid msg;
-  const auto & info = core_grid.getInfo();
-
   msg.header.stamp = stamp;
   msg.header.frame_id = frame_id;
-
   msg.info.resolution = static_cast<float>(info.resolution);
   msg.info.width = info.width;
   msg.info.height = info.height;
   msg.info.origin.position.x = info.origin_x;
   msg.info.origin.position.y = info.origin_y;
   msg.info.origin.position.z = 0.0;
-
-  // Neutral quaternion
-  msg.info.origin.orientation.x = 0.0;
-  msg.info.origin.orientation.y = 0.0;
-  msg.info.origin.orientation.z = 0.0;
   msg.info.origin.orientation.w = 1.0;
+}
 
-  // Direct copy of the underlying int8_t vector
+template <typename Grid>
+nav_msgs::msg::OccupancyGrid toRosMessage(
+  const Grid & core_grid, const std::string & frame_id, const rclcpp::Time & stamp)
+{
+  nav_msgs::msg::OccupancyGrid msg;
+  setOccupancyGridMetadata(msg, core_grid.getInfo(), frame_id, stamp);
   msg.data = core_grid.getData();
 
   return msg;
@@ -35,21 +32,21 @@ nav_msgs::msg::OccupancyGrid toRosMessage(
 }  // namespace
 
 nav_msgs::msg::OccupancyGrid Utils::toRosMessage(
-  const glidar_slam::core::OccupancyGrid & core_grid, const std::string & frame_id,
+  const glidar_slam::core::global_map::OccupancyGrid & core_grid, const std::string & frame_id,
   const rclcpp::Time & stamp)
 {
   return glidar_slam::ros2::toRosMessage(core_grid, frame_id, stamp);
 }
 
 nav_msgs::msg::OccupancyGrid Utils::toRosMessage(
-  const glidar_slam::core::GroundMarkingGrid & core_grid, const std::string & frame_id,
+  const glidar_slam::core::global_map::GroundMarkingGrid & core_grid, const std::string & frame_id,
   const rclcpp::Time & stamp)
 {
   return glidar_slam::ros2::toRosMessage(core_grid, frame_id, stamp);
 }
 
 sensor_msgs::msg::Image Utils::toRosImage(
-  const glidar_slam::core::GroundTextureGrid & core_grid, const std::string & frame_id,
+  const glidar_slam::core::global_map::GroundTextureGrid & core_grid, const std::string & frame_id,
   const rclcpp::Time & stamp)
 {
   sensor_msgs::msg::Image msg;
@@ -66,19 +63,11 @@ sensor_msgs::msg::Image Utils::toRosImage(
 }
 
 nav_msgs::msg::OccupancyGrid Utils::toCoverageMessage(
-  const glidar_slam::core::GroundTextureGrid & core_grid, const std::string & frame_id,
+  const glidar_slam::core::global_map::GroundTextureGrid & core_grid, const std::string & frame_id,
   const rclcpp::Time & stamp)
 {
   nav_msgs::msg::OccupancyGrid msg;
-  const auto & info = core_grid.getInfo();
-  msg.header.stamp = stamp;
-  msg.header.frame_id = frame_id;
-  msg.info.resolution = static_cast<float>(info.resolution);
-  msg.info.width = info.width;
-  msg.info.height = info.height;
-  msg.info.origin.position.x = info.origin_x;
-  msg.info.origin.position.y = info.origin_y;
-  msg.info.origin.orientation.w = 1.0;
+  setOccupancyGridMetadata(msg, core_grid.getInfo(), frame_id, stamp);
   msg.data = core_grid.getCoverageData();
   return msg;
 }

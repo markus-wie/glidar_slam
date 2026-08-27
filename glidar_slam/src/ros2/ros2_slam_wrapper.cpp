@@ -31,18 +31,20 @@ namespace glidar_slam::ros2 {
 
 using glidar_slam::core::KeyFrame;
 using glidar_slam::core::LaserScan;
-using glidar_slam::core::OccupancyGrid;
 using glidar_slam::core::Parameters;
 using glidar_slam::core::PointCloudXYZ;
 using glidar_slam::core::SlamSystem;
+using glidar_slam::core::global_map::GroundMarkingGrid;
+using glidar_slam::core::global_map::GroundTextureGrid;
+using glidar_slam::core::global_map::OccupancyGrid;
 
 Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("glidar_slam", options)
 {
   parameters_ = std::make_shared<Parameters>();
   slam_system_ = std::make_unique<SlamSystem>(parameters_);
   occ_grid_ = std::make_unique<OccupancyGrid>(parameters_);
-  ground_marking_grid_ = std::make_unique<glidar_slam::core::GroundMarkingGrid>(parameters_);
-  ground_texture_grid_ = std::make_unique<glidar_slam::core::GroundTextureGrid>(parameters_);
+  ground_marking_grid_ = std::make_unique<GroundMarkingGrid>(parameters_);
+  ground_texture_grid_ = std::make_unique<GroundTextureGrid>(parameters_);
   latest_odom_covariance_.setIdentity();
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*(tf_buffer_));
