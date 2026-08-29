@@ -7,7 +7,7 @@
 namespace glidar_slam::core::global_map {
 
 OccupancyGrid::OccupancyGrid(const std::shared_ptr<Parameters> & parameters)
-: GlobalMap(parameters->occ_map_resolution), parameters_(parameters)
+: GlobalMap(parameters->mapping_occupancy_resolution), parameters_(parameters)
 {
 }
 

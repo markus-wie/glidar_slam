@@ -25,9 +25,6 @@ public:
   static sensor_msgs::msg::Image toRosImage(
     const glidar_slam::core::global_map::GroundTextureGrid & core_grid,
     const std::string & frame_id, const rclcpp::Time & stamp);
-  static nav_msgs::msg::OccupancyGrid toCoverageMessage(
-    const glidar_slam::core::global_map::GroundTextureGrid & core_grid,
-    const std::string & frame_id, const rclcpp::Time & stamp);
 };
 
 }  // namespace glidar_slam::ros2

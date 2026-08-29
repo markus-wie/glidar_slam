@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cstdint>
+#include <functional>
 
 #include "gtsam/geometry/Pose3.h"
 #include "pcl/point_cloud.h"
@@ -16,13 +16,22 @@ struct TimedPose
 
 struct Point2D
 {
-  double x, y;
+  double x{0.0};
+  double y{0.0};
+};
+
+struct Point3D
+{
+  double x{0.0};
+  double y{0.0};
+  double z{0.0};
 };
 
 struct Pose2D
 {
-  double x, y;
-  double yaw;
+  double x{0.0};
+  double y{0.0};
+  double yaw{0.0};
 };
 
 struct PoseEstimate
@@ -32,8 +41,10 @@ struct PoseEstimate
 };
 
 using PointCloudXYZ = pcl::PointCloud<pcl::PointXYZ>;
-using PointCloudXYZPtr = PointCloudXYZ::Ptr;
-using PointCloudXYZConstPtr = PointCloudXYZ::ConstPtr;
+using PointCloudXYZPtr = pcl::PointCloud<pcl::PointXYZ>::Ptr;
+using PointCloudXYZConstPtr = pcl::PointCloud<pcl::PointXYZ>::ConstPtr;
 using PointCloudXYZRGBA = pcl::PointCloud<pcl::PointXYZRGBA>;
+using PointCloudXYZRGBAPtr = pcl::PointCloud<pcl::PointXYZRGBA>::Ptr;
+using PointCloudXYZRGBAConstPtr = pcl::PointCloud<pcl::PointXYZRGBA>::ConstPtr;
 
 }  // namespace glidar_slam::core

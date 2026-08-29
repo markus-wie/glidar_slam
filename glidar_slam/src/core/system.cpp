@@ -13,7 +13,6 @@
 #include "glidar_slam/core/utils.hpp"
 #include "glidar_slam/logger/logger.hpp"
 #include "pcl/common/transforms.h"
-#include "pcl/filters/voxel_grid.h"
 
 namespace glidar_slam::core {
 
@@ -75,7 +74,7 @@ gtsam::Pose3 makePlanarPose(const gtsam::Pose3 & pose)
   const gtsam::Vector3 rpy = pose.rotation().rpy();
   const double yaw = rpy.z();
   const auto & translation = pose.translation();
-  return Utils::makePlanarPose(translation.x(), translation.y(), yaw);
+  return utils::makePlanarPose(translation.x(), translation.y(), yaw);
 }
 
 gtsam::Matrix66 unobservablePoseCovariance(const Parameters & parameters)
@@ -124,20 +123,7 @@ double computeYawDistance(const gtsam::Pose3 & lhs, const gtsam::Pose3 & rhs)
 {
   const double lhs_yaw = lhs.rotation().rpy().z();
   const double rhs_yaw = rhs.rotation().rpy().z();
-  return std::abs(Utils::normalizeAngle(lhs_yaw - rhs_yaw));
-}
-
-pcl::PointCloud<pcl::PointXYZ>::Ptr voxelizeLidarScan(const LaserScan & scan, double voxel_size)
-{
-  pcl::PointCloud<pcl::PointXYZ>::Ptr voxelized_cloud =
-    std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-  pcl::VoxelGrid<pcl::PointXYZ> voxel_filter;
-  voxel_filter.setInputCloud(scan.points().makeShared());
-  voxel_filter.setLeafSize(
-    static_cast<float>(voxel_size), static_cast<float>(voxel_size), static_cast<float>(voxel_size));
-  voxel_filter.filter(*voxelized_cloud);
-
-  return voxelized_cloud;
+  return std::abs(utils::normalizeAngle(lhs_yaw - rhs_yaw));
 }
 
 std::vector<Point2D> linearInterpolateScan(const LaserScan & scan, double target_spacing = 0.05)
@@ -237,17 +223,19 @@ bool SlamSystem::process(
   const auto voxelization_start = std::chrono::steady_clock::now();
 
   std::shared_ptr<const LaserScan> laser_scan;
-  if (parameters_->lidar_voxelization_enable) {
-    const auto scan =
-      voxelizeLidarScan(*sensor_data.laserScan(), parameters_->lidar_voxelization_size);
-    laser_scan = std::make_shared<LaserScan>(std::move(*scan));
+  if (parameters_->scan_voxelization_enable) {
+    const PointCloudXYZPtr scan =
+      utils::voxelize(sensor_data.laserScan()->points(), parameters_->scan_voxelization_size);
+    laser_scan = std::make_shared<LaserScan>(scan);
   } else {
     laser_scan = sensor_data.laserScan();
   }
 
-  std::vector<Point2D> interpolated_points =
-    linearInterpolateScan(*laser_scan, parameters_->lidar_voxelization_size);
-  laser_scan = std::make_shared<LaserScan>(std::move(interpolated_points));
+  if (parameters_->scan_densification_enable) {
+    std::vector<Point2D> interpolated_points =
+      linearInterpolateScan(*laser_scan, parameters_->scan_voxelization_size);
+    laser_scan = std::make_shared<LaserScan>(std::move(interpolated_points));
+  }
 
   if (parameters_->debug_timings) {
     lidar_voxelization_ms = elapsedMilliseconds(voxelization_start);
@@ -287,7 +275,7 @@ bool SlamSystem::process(
       auto nearby_keyframes = map_database_->getNearbyKeyFrames(latest_pose_.pose, 2);
 
       for (const auto & kf : nearby_keyframes) {
-        std::vector<Point2D> pts = Utils::transformScanPoints(kf->scan->points2D(), kf->pose);
+        std::vector<Point2D> pts = utils::transformScanPoints(kf->scan->points2D(), kf->pose);
         submap_grid_->add(pts, kf->key);
       }
 
@@ -302,7 +290,7 @@ bool SlamSystem::process(
     }
 
     const CsmResult result =
-      scan_matcher_->match(*submap_grid_, laser_scan->points2D(), Utils::toPose2D(current_guess));
+      scan_matcher_->match(*submap_grid_, laser_scan->points2D(), utils::toPose2D(current_guess));
 
     std::chrono::steady_clock::time_point matching_time = std::chrono::steady_clock::now();
 
@@ -313,7 +301,7 @@ bool SlamSystem::process(
       return false;  // Localization lost
     }
 
-    gtsam::Pose3 optimized_pose = Utils::toPose3(result.optimized_pose);
+    gtsam::Pose3 optimized_pose = utils::toPose3(result.optimized_pose);
 
     {
       std::lock_guard<std::mutex> lock(latest_output_mutex_);
@@ -336,7 +324,7 @@ bool SlamSystem::process(
       submap_grid_->reset();
       auto nearby_keyframes = map_database_->getNearbyKeyFrames(optimized_pose, 2);
       for (const auto & kf : nearby_keyframes) {
-        std::vector<Point2D> pts = Utils::transformScanPoints(kf->scan->points2D(), kf->pose);
+        std::vector<Point2D> pts = utils::transformScanPoints(kf->scan->points2D(), kf->pose);
         submap_grid_->add(pts, kf->key);
       }
       localization_submap_center_ = optimized_pose;
@@ -366,9 +354,16 @@ bool SlamSystem::process(
 
     std::optional<GroundPlaneObservation> ground_observation;
     if (sensor_data.hasVisualData()) {
-      ground_observation = GroundPlaneExtractor::extract(
+      GroundPlaneExtractor::Result result = GroundPlaneExtractor::extract(
         sensor_data.image(), sensor_data.depth(), sensor_data.cameraModel().intrinsics(),
         sensor_data.cameraModel().baseFromCamera(), *parameters_);
+
+      if (!result.observation) {
+        SAM_WARN("Ground plane extraction failed: {}", result.failure_reason);
+      }
+
+      ground_observation = result.observation;
+      latest_ground_extraction_debug_ = result.debug_image;
     }
 
     gtsam::Pose3 root_pose;
@@ -409,8 +404,8 @@ bool SlamSystem::process(
       next_key, timestamp, root_pose, latest_odom_pose, laser_scan, prior_sigmas,
       ground_observation);
 
-    auto local_map =
-      MapBuilder::buildLocalOccupancy(laser_scan->points(), parameters_->occ_map_resolution);
+    auto local_map = MapBuilder::buildLocalOccupancy(
+      laser_scan->points(), parameters_->mapping_occupancy_resolution);
 
     if (ground_observation) {
       MapBuilder::addLocalGroundMap(local_map, ground_observation->ground_cloud, *parameters_);
@@ -436,7 +431,7 @@ bool SlamSystem::process(
 
     if (is_initialization) {
       std::vector<Point2D> initial_points =
-        Utils::transformScanPoints(laser_scan->points2D(), root_pose);
+        utils::transformScanPoints(laser_scan->points2D(), root_pose);
       submap_grid_->add(initial_points, new_keyframe->key);
 
       SAM_INFO("System initialized with first keyframe at timestamp: {}", timestamp);
@@ -444,7 +439,7 @@ bool SlamSystem::process(
       submap_grid_->reset();
 
       std::vector<Point2D> initial_points =
-        Utils::transformScanPoints(laser_scan->points2D(), root_pose);
+        utils::transformScanPoints(laser_scan->points2D(), root_pose);
       submap_grid_->add(initial_points, new_keyframe->key);
 
       // Dispatch background loop closure to tie this weak-prior branch to the historical map.
@@ -483,9 +478,18 @@ bool SlamSystem::process(
   std::optional<GroundPlaneObservation> ground_observation;
   if (sensor_data.hasVisualData()) {
     const auto start = std::chrono::steady_clock::now();
-    ground_observation = GroundPlaneExtractor::extract(
+
+    GroundPlaneExtractor::Result result = GroundPlaneExtractor::extract(
       sensor_data.image(), sensor_data.depth(), sensor_data.cameraModel().intrinsics(),
       sensor_data.cameraModel().baseFromCamera(), *parameters_);
+
+    if (!result.observation) {
+      SAM_WARN("Ground plane extraction failed: {}", result.failure_reason);
+    }
+
+    ground_observation = result.observation;
+    latest_ground_extraction_debug_ = result.debug_image;
+
     if (parameters_->debug_timings) {
       ground_extraction_ms = elapsedMilliseconds(start);
     }
@@ -497,7 +501,7 @@ bool SlamSystem::process(
 
   // Execute the Correlative Scan Matcher
   const CsmResult csm_result =
-    scan_matcher_->match(*submap_grid_, laser_scan->points2D(), Utils::toPose2D(current_guess));
+    scan_matcher_->match(*submap_grid_, laser_scan->points2D(), utils::toPose2D(current_guess));
 
   if (parameters_->debug_timings) {
     csm_ms = elapsedMilliseconds(csm_start);
@@ -526,7 +530,7 @@ bool SlamSystem::process(
   }
 
   // Convert optimized absolute Pose2D back to gtsam::Pose3
-  gtsam::Pose3 optimized_world_pose = Utils::toPose3(csm_result.optimized_pose);
+  gtsam::Pose3 optimized_world_pose = utils::toPose3(csm_result.optimized_pose);
 
   // Calculate the relative transform factor for the graph
   const gtsam::Pose3 csm_pose_delta =
@@ -581,8 +585,8 @@ bool SlamSystem::process(
 
   const auto map_start = std::chrono::steady_clock::now();
 
-  auto local_map =
-    MapBuilder::buildLocalOccupancy(laser_scan->points(), parameters_->occ_map_resolution);
+  auto local_map = MapBuilder::buildLocalOccupancy(
+    laser_scan->points(), parameters_->mapping_occupancy_resolution);
   if (ground_observation) {
     MapBuilder::addLocalGroundMap(local_map, ground_observation->ground_cloud, *parameters_);
   }
@@ -601,7 +605,7 @@ bool SlamSystem::process(
   const auto submap_start = std::chrono::steady_clock::now();
 
   std::vector<Point2D> newest_points =
-    Utils::transformScanPoints(laser_scan->points2D(), optimized_pose);
+    utils::transformScanPoints(laser_scan->points2D(), optimized_pose);
   submap_grid_->add(newest_points, next_keyframe_key);
   while (submap_grid_->size() > static_cast<std::size_t>(parameters_->submap_window_size)) {
     submap_grid_->removeOldestKeyframe();
@@ -686,12 +690,6 @@ bool SlamSystem::process(
   }
 
   return true;
-}
-
-gtsam::Pose3 SlamSystem::getLatestPose() const
-{
-  std::lock_guard<std::mutex> lock(latest_output_mutex_);
-  return latest_pose_.pose;
 }
 
 PoseEstimate SlamSystem::getLatestPoseAndCovariance() const
@@ -913,10 +911,16 @@ std::optional<GroundPlaneObservation> SlamSystem::getLatestGroundObservation() c
   return latest_ground_observation_;
 }
 
-std::optional<PointCloudXYZRGBA> SlamSystem::getLatestGroundMatchingDebug() const
+PointCloudXYZRGBAConstPtr SlamSystem::getLatestGroundMatchingDebug() const
 {
   std::lock_guard<std::mutex> lock(latest_output_mutex_);
   return latest_ground_matching_debug_;
+}
+
+std::optional<cv::Mat> SlamSystem::getLatestGroundExtractionDebug() const
+{
+  std::lock_guard<std::mutex> lock(latest_output_mutex_);
+  return latest_ground_extraction_debug_;
 }
 
 bool SlamSystem::processLoopClosureProposals()
@@ -966,7 +970,7 @@ void SlamSystem::rebuildSubmap()
 
   for (const std::shared_ptr<const KeyFrame> & keyframe : keyframes) {
     const std::vector<Point2D> points =
-      Utils::transformScanPoints(keyframe->scan->points2D(), keyframe->pose);
+      utils::transformScanPoints(keyframe->scan->points2D(), keyframe->pose);
     rebuilt_submap->add(points, keyframe->key);
   }
 
@@ -996,10 +1000,12 @@ void SlamSystem::dispatchFindLoopClosure(const KeyFrame & latest_keyframe)
 void SlamSystem::handleGroundConstraint(
   std::optional<GroundPlaneObservation> & ground_observation, uint64_t next_keyframe_key)
 {
-  const bool use_ground_constraint =
-    ground_observation.has_value() && parameters_->ground_optimization_enable &&
-    ground_observation->inlier_count >=
-      static_cast<std::size_t>(parameters_->ground_minimum_inlier_count);
+  // arbitrarily chosen threshold under which a realistic ground plane might not be observable
+  constexpr std::size_t MINIMUM_INLIER_COUNT = 50;
+
+  const bool use_ground_constraint = ground_observation.has_value() &&
+                                     parameters_->ground_optimization_enable &&
+                                     ground_observation->inlier_count >= MINIMUM_INLIER_COUNT;
 
   if (!use_ground_constraint) {
     return;
@@ -1014,8 +1020,10 @@ void SlamSystem::handleGroundConstraint(
 
   if (parameters_->ground_debug_enable) {
     SAM_INFO(
-      "Ground plane factor added at keyframe {} with {} fresh inliers", next_keyframe_key,
-      ground_observation->inlier_count);
+      "Ground plane factor added at keyframe {} with {} fresh inliers. Ground normal: ({}, {}, "
+      "{}), Ground distance: {}",
+      next_keyframe_key, ground_observation->inlier_count, ground_normal_in_base.x(),
+      ground_normal_in_base.y(), ground_normal_in_base.z(), ground_distance_to_base);
   }
 }
 
@@ -1032,7 +1040,7 @@ void SlamSystem::handleGroundMatchingConstraint(
 
   const double INF_VAR = parameters_->unobservable_variance;
   const Pose2D relative_ground_pose_estimate =
-    Utils::toPose2D(reference_keyframe->pose.inverse().compose(current_guess));
+    utils::toPose2D(reference_keyframe->pose.inverse().compose(current_guess));
 
   const auto ground_match = ground_marking_matcher_->match(
     *reference_keyframe->ground_observation, *ground_observation, relative_ground_pose_estimate);
@@ -1056,11 +1064,11 @@ void SlamSystem::handleGroundMatchingConstraint(
   ground_covariance(2, 4) = ground_match->covariance(2, 1);
 
   graph_optimizer_->addRelativeFactor(
-    reference_keyframe->key, next_keyframe_key, Utils::toPose3(ground_match->optimized_pose),
+    reference_keyframe->key, next_keyframe_key, utils::toPose3(ground_match->optimized_pose),
     ground_covariance);
 
   if (parameters_->ground_matching_debug_enable) {
-    const PointCloudXYZRGBA reference_debug_cloud = ground_marking_matcher_->makeDebugCloud(
+    const PointCloudXYZRGBAPtr reference_debug_cloud = ground_marking_matcher_->makeDebugCloud(
       *reference_keyframe->ground_observation, *ground_observation, *ground_match,
       relative_ground_pose_estimate);
 
@@ -1076,8 +1084,8 @@ void SlamSystem::handleGroundMatchingConstraint(
       Eigen::AngleAxisf(static_cast<float>(reference_rpy.y()), Eigen::Vector3f::UnitY()) *
       Eigen::AngleAxisf(static_cast<float>(reference_rpy.x()), Eigen::Vector3f::UnitX());
 
-    PointCloudXYZRGBA map_debug_cloud;
-    pcl::transformPointCloud(reference_debug_cloud, map_debug_cloud, map_from_reference);
+    PointCloudXYZRGBAPtr map_debug_cloud = std::make_shared<PointCloudXYZRGBA>();
+    pcl::transformPointCloud(*reference_debug_cloud, *map_debug_cloud, map_from_reference);
 
     std::lock_guard<std::mutex> lock(latest_output_mutex_);
     latest_ground_matching_debug_ = std::move(map_debug_cloud);
@@ -1092,92 +1100,6 @@ void SlamSystem::handleGroundMatchingConstraint(
       "Ground marking factor added at keyframe {} with score {}", next_keyframe_key,
       ground_match->score);
   }
-}
-
-PointCloudXYZ SlamSystem::getMapCloud() const
-{
-  PointCloudXYZ map_cloud;
-
-  for (const std::shared_ptr<const KeyFrame> & keyframe : map_database_->getAllKeyFrames()) {
-    const gtsam::Vector3 rpy = keyframe->pose.rotation().rpy();
-    const Eigen::AngleAxisf roll_angle(static_cast<float>(rpy.x()), Eigen::Vector3f::UnitX());
-    const Eigen::AngleAxisf pitch_angle(static_cast<float>(rpy.y()), Eigen::Vector3f::UnitY());
-    const Eigen::AngleAxisf yaw_angle(static_cast<float>(rpy.z()), Eigen::Vector3f::UnitZ());
-
-    const auto translation = keyframe->pose.translation();
-    const Eigen::Affine3f transform =
-      Eigen::Translation3f(
-        static_cast<float>(translation.x()), static_cast<float>(translation.y()),
-        static_cast<float>(translation.z())) *
-      yaw_angle * pitch_angle * roll_angle;
-
-    PointCloudXYZ transformed_scan;
-    pcl::transformPointCloud(keyframe->scan->points(), transformed_scan, transform);
-    map_cloud += transformed_scan;
-  }
-
-  map_cloud.width = static_cast<std::uint32_t>(map_cloud.size());
-  map_cloud.height = 1;
-  map_cloud.is_dense = true;
-  return map_cloud;
-}
-
-std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> SlamSystem::getTransformedKeyFrameScans() const
-{
-  std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> out;
-  const auto keyframes = map_database_->getAllKeyFrames();
-  out.reserve(keyframes.size());
-
-  for (const std::shared_ptr<const KeyFrame> & keyframe : keyframes) {
-    const gtsam::Vector3 rpy = keyframe->pose.rotation().rpy();
-    const Eigen::AngleAxisf roll_angle(static_cast<float>(rpy.x()), Eigen::Vector3f::UnitX());
-    const Eigen::AngleAxisf pitch_angle(static_cast<float>(rpy.y()), Eigen::Vector3f::UnitY());
-    const Eigen::AngleAxisf yaw_angle(static_cast<float>(rpy.z()), Eigen::Vector3f::UnitZ());
-
-    const auto translation = keyframe->pose.translation();
-    const Eigen::Affine3f transform =
-      Eigen::Translation3f(
-        static_cast<float>(translation.x()), static_cast<float>(translation.y()),
-        static_cast<float>(translation.z())) *
-      yaw_angle * pitch_angle * roll_angle;
-
-    PointCloudXYZ transformed_scan;
-    pcl::transformPointCloud(keyframe->scan->points(), transformed_scan, transform);
-    out.emplace_back(keyframe->pose, std::move(transformed_scan));
-  }
-
-  return out;
-}
-
-std::vector<pcl::PointCloud<pcl::PointXYZRGBA>> SlamSystem::getTransformedGroundClouds() const
-{
-  std::vector<pcl::PointCloud<pcl::PointXYZRGBA>> clouds;
-
-  for (const std::shared_ptr<const KeyFrame> & keyframe : map_database_->getAllKeyFrames()) {
-    if (
-      !keyframe->ground_observation.has_value() ||
-      keyframe->ground_observation->ground_cloud.empty()) {
-      continue;
-    }
-
-    const gtsam::Vector3 rpy = keyframe->pose.rotation().rpy();
-    const Eigen::AngleAxisf roll_angle(static_cast<float>(rpy.x()), Eigen::Vector3f::UnitX());
-    const Eigen::AngleAxisf pitch_angle(static_cast<float>(rpy.y()), Eigen::Vector3f::UnitY());
-    const Eigen::AngleAxisf yaw_angle(static_cast<float>(rpy.z()), Eigen::Vector3f::UnitZ());
-    const auto translation = keyframe->pose.translation();
-    const Eigen::Affine3f transform =
-      Eigen::Translation3f(
-        static_cast<float>(translation.x()), static_cast<float>(translation.y()),
-        static_cast<float>(translation.z())) *
-      yaw_angle * pitch_angle * roll_angle;
-
-    pcl::PointCloud<pcl::PointXYZRGBA> transformed_cloud;
-    pcl::transformPointCloud(
-      keyframe->ground_observation->ground_cloud, transformed_cloud, transform);
-    clouds.push_back(std::move(transformed_cloud));
-  }
-
-  return clouds;
 }
 
 std::vector<std::shared_ptr<const KeyFrame>> SlamSystem::getKeyFrames() const

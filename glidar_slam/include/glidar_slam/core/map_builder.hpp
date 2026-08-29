@@ -39,9 +39,9 @@ public:
   std::shared_ptr<const GlobalMapSnapshot> getLatest() const;
 
   static global_map::LocalMapData buildLocalOccupancy(
-    const PointCloudXYZ & scan, double resolution);
+    const PointCloudXYZConstPtr & scan, double resolution);
   static void addLocalGroundMap(
-    global_map::LocalMapData & data, const PointCloudXYZRGBA & cloud,
+    global_map::LocalMapData & data, const PointCloudXYZRGBAConstPtr & cloud,
     const Parameters & parameters);
 
 private:

@@ -62,13 +62,4 @@ sensor_msgs::msg::Image Utils::toRosImage(
   return msg;
 }
 
-nav_msgs::msg::OccupancyGrid Utils::toCoverageMessage(
-  const glidar_slam::core::global_map::GroundTextureGrid & core_grid, const std::string & frame_id,
-  const rclcpp::Time & stamp)
-{
-  nav_msgs::msg::OccupancyGrid msg;
-  setOccupancyGridMetadata(msg, core_grid.getInfo(), frame_id, stamp);
-  msg.data = core_grid.getCoverageData();
-  return msg;
-}
 }  // namespace glidar_slam::ros2

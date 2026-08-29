@@ -56,16 +56,16 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   parameters_->scan_topic = this->declare_parameter<std::string>("scan_topic", "/scan");
   parameters_->tf_topic = this->declare_parameter<std::string>("tf_topic", "/tf");
   parameters_->odom_topic = this->declare_parameter<std::string>("odom_topic", "/odom");
-  parameters_->csm_debug_low_topic = this->declare_parameter<std::string>(
-    "csm_debug_low_topic", "glidar_slam/debug/csm_likelihood_low");
-  parameters_->csm_debug_high_topic = this->declare_parameter<std::string>(
-    "csm_debug_high_topic", "glidar_slam/debug/csm_likelihood_high");
+
   parameters_->color_image_topic =
     this->declare_parameter<std::string>("color_image_topic", "/camera/color/image_raw");
   parameters_->aligned_depth_image_topic = this->declare_parameter<std::string>(
     "aligned_depth_image_topic", "/camera/aligned_depth/image_raw");
   parameters_->color_camera_info_topic =
     this->declare_parameter<std::string>("color_camera_info_topic", "/camera/color/camera_info");
+
+  parameters_->approx_sync_max_interval =
+    this->declare_parameter<double>("approx_sync_max_interval", 0.1);
 
   parameters_->odom_covariance_diagonal = this->declare_parameter<std::vector<double>>(
     "odom_covariance_diagonal", std::vector<double>{-1.0, -1.0, -1.0, -1.0, -1.0, -1.0});
@@ -79,43 +79,47 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->declare_parameter<double>("minimum_travel_heading", 0.5);
   parameters_->unobservable_variance =
     this->declare_parameter<double>("unobservable_variance", 1e6);
+  parameters_->submap_window_size = this->declare_parameter<int>("submap_window_size", 5);
+
+  parameters_->localization_mode = this->declare_parameter<bool>("localization_mode", false);
+  parameters_->localization_minimum_score =
+    this->declare_parameter<double>("localization_minimum_score", 0.5);
+
   parameters_->debug_visualize_covariances =
     this->declare_parameter<bool>("debug_visualize_covariances", false);
-
-  parameters_->lidar_voxelization_enable =
-    this->declare_parameter<bool>("lidar_voxelization_enable", true);
-  parameters_->lidar_voxelization_size =
-    this->declare_parameter<double>("lidar_voxelization_size", 0.2);
-
-  parameters_->occ_map_resolution = this->declare_parameter<double>("occ_map_resolution", 0.05);
-  parameters_->occ_map_padding = this->declare_parameter<int>("occ_map_padding", 2);
-
-  parameters_->submap_window_size = this->declare_parameter<int>("submap_window_size", 5);
+  parameters_->debug_timings = this->declare_parameter<bool>("debug_timings", false);
   parameters_->ground_debug_enable = this->declare_parameter<bool>("ground_debug_enable", false);
-  parameters_->ground_debug_cloud_topic = this->declare_parameter<std::string>(
-    "ground_debug_cloud_topic", "glidar_slam/debug/ground_inliers");
-  parameters_->ground_debug_marker_topic = this->declare_parameter<std::string>(
-    "ground_debug_marker_topic", "glidar_slam/debug/ground_plane");
-  parameters_->ground_debug_image_topic = this->declare_parameter<std::string>(
-    "ground_debug_image_topic", "glidar_slam/debug/ground_overlay");
-  parameters_->ground_debug_plane_size =
-    this->declare_parameter<double>("ground_debug_plane_size", 4.0);
+  parameters_->ground_matching_debug_enable =
+    this->declare_parameter<bool>("ground_matching_debug_enable", false);
+  parameters_->loop_debug_enable = this->declare_parameter<bool>("loop_debug_enable", false);
+
+  parameters_->scan_voxelization_enable =
+    this->declare_parameter<bool>("scan.voxelization_enable", true);
+  parameters_->scan_voxelization_size =
+    this->declare_parameter<double>("scan.voxelization_size", 0.2);
+  parameters_->scan_densification_enable =
+    this->declare_parameter<bool>("scan.densification_enable", true);
+
+  parameters_->mapping_occupancy_resolution =
+    this->declare_parameter<double>("mapping.occupancy.resolution", 0.05);
+  parameters_->mapping_ground_resolution =
+    this->declare_parameter<double>("mapping.ground.resolution", 0.02);
+  parameters_->mapping_ground_enable_texture_mapping =
+    this->declare_parameter<bool>("mapping.ground.enable_texture_mapping", true);
+  parameters_->mapping_ground_enable_ground_marking_mapping =
+    this->declare_parameter<bool>("mapping.ground.enable_ground_marking_mapping", false);
+  parameters_->mapping_threshold = this->declare_parameter<int>("mapping.threshold", 200);
+  parameters_->mapping_log_odds_hit = this->declare_parameter<double>("mapping.log_odds_hit", 0.8);
+  parameters_->mapping_log_odds_miss =
+    this->declare_parameter<double>("mapping.log_odds_miss", 0.35);
+  parameters_->mapping_log_odds_cap = this->declare_parameter<double>("mapping.log_odds_cap", 15.0);
+
   parameters_->ground_optimization_enable =
     this->declare_parameter<bool>("ground_optimization_enable", true);
-  parameters_->ground_observation_max_age_sec =
-    this->declare_parameter<double>("ground_observation_max_age_sec", 0.1);
-  parameters_->ground_minimum_inlier_count =
-    this->declare_parameter<int>("ground_minimum_inlier_count", 100);
   parameters_->ground_normal_sigma = this->declare_parameter<double>("ground_normal_sigma", 0.05);
   parameters_->ground_distance_sigma =
     this->declare_parameter<double>("ground_distance_sigma", 0.03);
-  parameters_->ground_fallback_variance =
-    this->declare_parameter<double>("ground_fallback_variance", 1.0);
-  if (
-    !std::isfinite(parameters_->ground_observation_max_age_sec) ||
-    parameters_->ground_observation_max_age_sec <= 0.0) {
-    throw std::runtime_error("ground_observation_max_age_sec must be finite and positive");
-  }
+
   const std::string ground_roi_ratios =
     this->declare_parameter<std::string>("ground_roi_ratios", "0.0 0.0 0.2 0.4");
   if (!parseGroundRoiRatios(ground_roi_ratios, parameters_->ground_roi_ratios)) {
@@ -131,66 +135,18 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->declare_parameter<double>("ground_extraction_max_distance", 4.0);
   parameters_->ground_extraction_distance_threshold =
     this->declare_parameter<double>("ground_extraction_distance_threshold", 0.05);
-  parameters_->ground_mapping_enable_texture_mapping =
-    this->declare_parameter<bool>("ground_mapping_enable_texture_mapping", true);
-  parameters_->ground_mapping_enable_ground_marking_mapping =
-    this->declare_parameter<bool>("ground_mapping_enable_ground_marking_mapping", false);
-  parameters_->ground_marking_map_topic =
-    this->declare_parameter<std::string>("ground_marking_map_topic", "ground_markings_map");
-  parameters_->ground_texture_map_topic =
-    this->declare_parameter<std::string>("ground_texture_map_topic", "ground_texture_map");
-  parameters_->ground_texture_coverage_topic = this->declare_parameter<std::string>(
-    "ground_texture_coverage_topic", "ground_texture_coverage");
-  parameters_->ground_map_resolution =
-    this->declare_parameter<double>("ground_map_resolution", 0.02);
-  parameters_->ground_map_padding = this->declare_parameter<int>("ground_map_padding", 2);
-  parameters_->ground_marking_white_threshold =
-    this->declare_parameter<int>("ground_marking_white_threshold", 200);
-  parameters_->ground_marking_log_odds_hit =
-    this->declare_parameter<double>("ground_marking_log_odds_hit", 0.8);
-  parameters_->ground_marking_log_odds_miss =
-    this->declare_parameter<double>("ground_marking_log_odds_miss", 0.35);
-  parameters_->ground_marking_log_odds_cap =
-    this->declare_parameter<double>("ground_marking_log_odds_cap", 15.0);
+  parameters_->ground_extraction_adaptive_threshold_block_size =
+    this->declare_parameter<int>("ground_extraction_adaptive_threshold_block_size", 101);
+  parameters_->ground_extraction_adaptive_threshold_C =
+    this->declare_parameter<double>("ground_extraction_adaptive_threshold_C", -65.0);
+
   parameters_->ground_matching_enable =
     this->declare_parameter<bool>("ground_matching_enable", false);
-  parameters_->ground_matching_minimum_marking_count =
-    this->declare_parameter<int>("ground_matching_minimum_marking_count", 20);
   parameters_->ground_matching_minimum_score =
     this->declare_parameter<double>("ground_matching_minimum_score", 0.5);
-  parameters_->ground_matching_min_forward_distance =
-    this->declare_parameter<double>("ground_matching_min_forward_distance", 0.0);
-  parameters_->ground_matching_max_forward_distance =
-    this->declare_parameter<double>("ground_matching_max_forward_distance", 2.0);
-  parameters_->ground_matching_debug_enable =
-    this->declare_parameter<bool>("ground_matching_debug_enable", false);
-  parameters_->ground_matching_debug_topic = this->declare_parameter<std::string>(
-    "ground_matching_debug_topic", "glidar_slam/debug/ground_matching");
-  if (
-    !std::isfinite(parameters_->ground_marking_log_odds_hit) ||
-    parameters_->ground_marking_log_odds_hit <= 0.0 ||
-    parameters_->ground_marking_log_odds_hit >= 1.0 ||
-    !std::isfinite(parameters_->ground_marking_log_odds_miss) ||
-    parameters_->ground_marking_log_odds_miss <= 0.0 ||
-    parameters_->ground_marking_log_odds_miss >= 1.0 ||
-    !std::isfinite(parameters_->ground_marking_log_odds_cap) ||
-    parameters_->ground_marking_log_odds_cap <= 0.0 ||
-    parameters_->ground_matching_minimum_marking_count < 0 ||
-    !std::isfinite(parameters_->ground_matching_minimum_score) ||
-    parameters_->ground_matching_minimum_score < 0.0 ||
-    !std::isfinite(parameters_->ground_matching_min_forward_distance) ||
-    !std::isfinite(parameters_->ground_matching_max_forward_distance) ||
-    parameters_->ground_matching_min_forward_distance >=
-      parameters_->ground_matching_max_forward_distance) {
-    throw std::runtime_error(
-      "Ground marking log-odds and matching parameters are outside their valid ranges");
-  }
+  parameters_->ground_matching_max_distance =
+    this->declare_parameter<double>("ground_matching_max_distance", 2.0);
 
-  parameters_->loop_debug_enable = this->declare_parameter<bool>("loop_debug_enable", false);
-  parameters_->loop_input_queue_capacity =
-    static_cast<std::size_t>(this->declare_parameter<int>("loop_input_queue_capacity", 2));
-  parameters_->loop_output_queue_capacity =
-    static_cast<std::size_t>(this->declare_parameter<int>("loop_output_queue_capacity", 8));
   parameters_->loop_minimum_key_separation =
     static_cast<uint64_t>(this->declare_parameter<int>("loop_minimum_key_separation", 20));
   parameters_->loop_maximum_yaw_difference =
@@ -198,10 +154,10 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   parameters_->loop_mahalanobis_threshold =
     this->declare_parameter<double>("loop_mahalanobis_threshold", 3.0);
   parameters_->loop_minimum_score = this->declare_parameter<double>("loop_minimum_score", 0.5);
-  parameters_->localization_minimum_score =
-    this->declare_parameter<double>("localization_minimum_score", 0.5);
-  this->declare_parameter<bool>("localization_mode", false);
-  parameters_->debug_timings = this->declare_parameter<bool>("debug_timings", false);
+
+  parameters_->isam_relinearizeThreshold =
+    this->declare_parameter<double>("isam_relinearizeThreshold", 0.1);
+  parameters_->isam_relinearizeSkip = this->declare_parameter<int>("isam_relinearizeSkip", 10);
 
   scan_matcher_loader_ = std::make_unique<pluginlib::ClassLoader<ScanMatcherInterface>>(
     "glidar_slam", "glidar_slam::ros2::ScanMatcherInterface");
@@ -261,34 +217,35 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     &Ros2SlamWrapper::ScanRGBDCallback, this, std::placeholders::_1, std::placeholders::_2,
     std::placeholders::_3, std::placeholders::_4));
   ground_synchronizer_->setMaxIntervalDuration(
-    rclcpp::Duration::from_seconds(parameters_->ground_observation_max_age_sec));
+    rclcpp::Duration::from_seconds(parameters_->approx_sync_max_interval));
 
   // Publishers
-  marker_array_publisher_ =
-    this->create_publisher<visualization_msgs::msg::MarkerArray>("graph_visualization", 10);
-  occupancy_grid_publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("map", 10);
+  marker_array_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+    "glidar_slam/graph_visualization", 10);
+  occupancy_grid_publisher_ =
+    this->create_publisher<nav_msgs::msg::OccupancyGrid>("glidar_slam/map", 10);
   ground_marking_grid_publisher_ =
-    this->create_publisher<nav_msgs::msg::OccupancyGrid>(parameters_->ground_marking_map_topic, 10);
+    this->create_publisher<nav_msgs::msg::OccupancyGrid>("glidar_slam/ground_markings_map", 10);
   ground_texture_image_publisher_ =
-    this->create_publisher<sensor_msgs::msg::Image>(parameters_->ground_texture_map_topic, 10);
-  ground_texture_coverage_publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(
-    parameters_->ground_texture_coverage_topic, 10);
-  ground_debug_cloud_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-    parameters_->ground_debug_cloud_topic, 10);
+    this->create_publisher<sensor_msgs::msg::Image>("glidar_slam/ground_texture_map", 10);
+  ground_debug_cloud_publisher_ =
+    this->create_publisher<sensor_msgs::msg::PointCloud2>("glidar_slam/debug/ground_inliers", 10);
   ground_initial_debug_cloud_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
     "glidar_slam/debug/ground_initial_inliers", 10);
-  ground_matching_debug_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-    parameters_->ground_matching_debug_topic, 10);
+  ground_matching_debug_publisher_ =
+    this->create_publisher<sensor_msgs::msg::PointCloud2>("glidar_slam/debug/ground_matching", 10);
   ground_debug_marker_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
-    parameters_->ground_debug_marker_topic, 10);
+    "glidar_slam/debug/ground_plane", 10);
   ground_debug_image_publisher_ =
-    this->create_publisher<sensor_msgs::msg::Image>(parameters_->ground_debug_image_topic, 10);
+    this->create_publisher<sensor_msgs::msg::Image>("glidar_slam/debug/ground_overlay", 10);
   csm_debug_low_publisher_ =
-    this->create_publisher<sensor_msgs::msg::Image>(parameters_->csm_debug_low_topic, 10);
+    this->create_publisher<sensor_msgs::msg::Image>("glidar_slam/debug/csm_likelihood_low", 10);
   csm_debug_high_publisher_ =
-    this->create_publisher<sensor_msgs::msg::Image>(parameters_->csm_debug_high_topic, 10);
+    this->create_publisher<sensor_msgs::msg::Image>("glidar_slam/debug/csm_likelihood_high", 10);
+  ground_extraction_debug_publisher_ =
+    this->create_publisher<sensor_msgs::msg::Image>("glidar_slam/debug/ground_extraction", 10);
   estimated_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-    "/glidar_slam/estimated_pose", 10);
+    "glidar_slam/estimated_pose", 10);
 
   // Timer
   transform_broadcast_timer_ = this->create_wall_timer(
@@ -417,32 +374,22 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.unobservable_variance = parameter.as_double();
     } else if (name == "debug_visualize_covariances") {
       updated.debug_visualize_covariances = parameter.as_bool();
-    } else if (name == "lidar_voxelization_enable") {
-      updated.lidar_voxelization_enable = parameter.as_bool();
-    } else if (name == "lidar_voxelization_size") {
-      updated.lidar_voxelization_size = parameter.as_double();
-    } else if (name == "occ_map_resolution") {
-      updated.occ_map_resolution = parameter.as_double();
-    } else if (name == "occ_map_padding") {
-      updated.occ_map_padding = static_cast<int>(parameter.as_int());
+    } else if (name == "scan_voxelization_enable") {
+      updated.scan_voxelization_enable = parameter.as_bool();
+    } else if (name == "scan_voxelization_size") {
+      updated.scan_voxelization_size = parameter.as_double();
+    } else if (name == "mapping.scan_map_resolution") {
+      updated.mapping_occupancy_resolution = parameter.as_double();
     } else if (name == "submap_window_size") {
       updated.submap_window_size = static_cast<int>(parameter.as_int());
     } else if (name == "ground_debug_enable") {
       updated.ground_debug_enable = parameter.as_bool();
-    } else if (name == "ground_debug_plane_size") {
-      updated.ground_debug_plane_size = parameter.as_double();
     } else if (name == "ground_optimization_enable") {
       updated.ground_optimization_enable = parameter.as_bool();
-    } else if (name == "ground_observation_max_age_sec") {
-      updated.ground_observation_max_age_sec = parameter.as_double();
-    } else if (name == "ground_minimum_inlier_count") {
-      updated.ground_minimum_inlier_count = static_cast<int>(parameter.as_int());
     } else if (name == "ground_normal_sigma") {
       updated.ground_normal_sigma = parameter.as_double();
     } else if (name == "ground_distance_sigma") {
       updated.ground_distance_sigma = parameter.as_double();
-    } else if (name == "ground_fallback_variance") {
-      updated.ground_fallback_variance = parameter.as_double();
     } else if (name == "ground_roi_ratios") {
       if (!parseGroundRoiRatios(parameter.as_string(), updated.ground_roi_ratios)) {
         result.successful = false;
@@ -457,36 +404,33 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.ground_extraction_max_distance = parameter.as_double();
     } else if (name == "ground_extraction_distance_threshold") {
       updated.ground_extraction_distance_threshold = parameter.as_double();
-    } else if (name == "ground_mapping_enable_texture_mapping") {
-      updated.ground_mapping_enable_texture_mapping = parameter.as_bool();
-    } else if (name == "ground_mapping_enable_ground_marking_mapping") {
-      updated.ground_mapping_enable_ground_marking_mapping = parameter.as_bool();
-    } else if (name == "ground_map_resolution") {
-      updated.ground_map_resolution = parameter.as_double();
-    } else if (name == "ground_map_padding") {
-      updated.ground_map_padding = static_cast<int>(parameter.as_int());
-    } else if (name == "ground_marking_white_threshold") {
-      updated.ground_marking_white_threshold = static_cast<int>(parameter.as_int());
-    } else if (name == "ground_marking_log_odds_hit") {
-      updated.ground_marking_log_odds_hit = parameter.as_double();
-    } else if (name == "ground_marking_log_odds_miss") {
-      updated.ground_marking_log_odds_miss = parameter.as_double();
-    } else if (name == "ground_marking_log_odds_cap") {
-      updated.ground_marking_log_odds_cap = parameter.as_double();
+    } else if (name == "ground_extraction_adaptive_threshold_block_size") {
+      updated.ground_extraction_adaptive_threshold_block_size =
+        static_cast<int>(parameter.as_int());
+    } else if (name == "ground_extraction_adaptive_threshold_C") {
+      updated.ground_extraction_adaptive_threshold_C = parameter.as_double();
+    } else if (name == "mapping_ground_enable_texture_mapping") {
+      updated.mapping_ground_enable_texture_mapping = parameter.as_bool();
+    } else if (name == "mapping_ground_enable_ground_marking_mapping") {
+      updated.mapping_ground_enable_ground_marking_mapping = parameter.as_bool();
+    } else if (name == "mapping.ground_map_resolution") {
+      updated.mapping_ground_resolution = parameter.as_double();
+    } else if (name == "mapping_threshold") {
+      updated.mapping_threshold = static_cast<int>(parameter.as_int());
+    } else if (name == "mapping_log_odds_hit") {
+      updated.mapping_log_odds_hit = parameter.as_double();
+    } else if (name == "mapping_log_odds_miss") {
+      updated.mapping_log_odds_miss = parameter.as_double();
+    } else if (name == "mapping_log_odds_cap") {
+      updated.mapping_log_odds_cap = parameter.as_double();
     } else if (name == "ground_matching_enable") {
       updated.ground_matching_enable = parameter.as_bool();
-    } else if (name == "ground_matching_minimum_marking_count") {
-      updated.ground_matching_minimum_marking_count = static_cast<int>(parameter.as_int());
     } else if (name == "ground_matching_minimum_score") {
       updated.ground_matching_minimum_score = parameter.as_double();
-    } else if (name == "ground_matching_min_forward_distance") {
-      updated.ground_matching_min_forward_distance = parameter.as_double();
-    } else if (name == "ground_matching_max_forward_distance") {
-      updated.ground_matching_max_forward_distance = parameter.as_double();
+    } else if (name == "ground_matching_max_distance") {
+      updated.ground_matching_max_distance = parameter.as_double();
     } else if (name == "ground_matching_debug_enable") {
       updated.ground_matching_debug_enable = parameter.as_bool();
-    } else if (name == "ground_matching_debug_topic") {
-      updated.ground_matching_debug_topic = parameter.as_string();
     } else if (name == "loop_debug_enable") {
       updated.loop_debug_enable = parameter.as_bool();
     } else if (name == "loop_minimum_key_separation") {
@@ -521,28 +465,18 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
   }
 
   if (
-    !std::isfinite(updated.ground_marking_log_odds_hit) ||
-    updated.ground_marking_log_odds_hit <= 0.0 || updated.ground_marking_log_odds_hit >= 1.0 ||
-    !std::isfinite(updated.ground_marking_log_odds_miss) ||
-    updated.ground_marking_log_odds_miss <= 0.0 || updated.ground_marking_log_odds_miss >= 1.0 ||
-    !std::isfinite(updated.ground_marking_log_odds_cap) ||
-    updated.ground_marking_log_odds_cap <= 0.0 ||
-    !std::isfinite(updated.ground_observation_max_age_sec) ||
-    updated.ground_observation_max_age_sec <= 0.0 ||
-    updated.ground_matching_minimum_marking_count < 0 ||
+    !std::isfinite(updated.mapping_log_odds_hit) || updated.mapping_log_odds_hit <= 0.0 ||
+    updated.mapping_log_odds_hit >= 1.0 || !std::isfinite(updated.mapping_log_odds_miss) ||
+    updated.mapping_log_odds_miss <= 0.0 || updated.mapping_log_odds_miss >= 1.0 ||
+    !std::isfinite(updated.mapping_log_odds_cap) || updated.mapping_log_odds_cap <= 0.0 ||
     !std::isfinite(updated.ground_matching_minimum_score) ||
-    updated.ground_matching_minimum_score < 0.0 ||
-    !std::isfinite(updated.ground_matching_min_forward_distance) ||
-    !std::isfinite(updated.ground_matching_max_forward_distance) ||
-    updated.ground_matching_min_forward_distance >= updated.ground_matching_max_forward_distance) {
+    updated.ground_matching_minimum_score < 0.0) {
     result.successful = false;
     result.reason = "ground marking log-odds, observation age, or matching parameters are invalid";
     return result;
   }
 
   *parameters_ = std::move(updated);
-  ground_synchronizer_->setMaxIntervalDuration(
-    rclcpp::Duration::from_seconds(parameters_->ground_observation_max_age_sec));
 
   return result;
 }
@@ -756,21 +690,21 @@ void Ros2SlamWrapper::publishGroundDebug(
   const glidar_slam::core::GroundPlaneObservation & observation, const rclcpp::Time & stamp) const
 {
   sensor_msgs::msg::PointCloud2 cloud_msg;
-  pcl::toROSMsg(observation.ground_cloud, cloud_msg);
+  pcl::toROSMsg(*observation.ground_cloud, cloud_msg);
   cloud_msg.header.stamp = stamp;
   cloud_msg.header.frame_id = parameters_->base_frame;
   ground_debug_cloud_publisher_->publish(cloud_msg);
 
   sensor_msgs::msg::PointCloud2 initial_cloud_msg;
-  pcl::toROSMsg(observation.pcl, initial_cloud_msg);
+  pcl::toROSMsg(*observation.ground_cloud_sparse, initial_cloud_msg);
   initial_cloud_msg.header.stamp = stamp;
   initial_cloud_msg.header.frame_id = parameters_->base_frame;
   ground_initial_debug_cloud_publisher_->publish(initial_cloud_msg);
 
   visualization_msgs::msg::MarkerArray marker_array;
 
-  marker_array.markers.push_back(makeGroundPlaneMarker(
-    observation, parameters_->base_frame, stamp, parameters_->ground_debug_plane_size));
+  marker_array.markers.push_back(
+    makeGroundPlaneMarker(observation, parameters_->base_frame, stamp));
 
   marker_array.markers.push_back(
     makeGroundNormalMarker(observation, parameters_->base_frame, stamp));
@@ -835,7 +769,7 @@ void Ros2SlamWrapper::publishGroundDebugImage(
 
   const Eigen::Affine3f camera_from_base = base_from_camera.inverse();
 
-  for (const auto & point : observation.ground_cloud) {
+  for (const auto & point : *observation.ground_cloud) {
     const Eigen::Vector3f point_in_camera =
       camera_from_base * Eigen::Vector3f(point.x, point.y, point.z);
     if (!point_in_camera.allFinite() || point_in_camera.z() <= 0.0F) {
@@ -1071,36 +1005,29 @@ void Ros2SlamWrapper::publishGroundMap(
   const rclcpp::Time & stamp)
 {
   if (
-    !parameters_->ground_mapping_enable_texture_mapping &&
-    !parameters_->ground_mapping_enable_ground_marking_mapping) {
+    !parameters_->mapping_ground_enable_texture_mapping &&
+    !parameters_->mapping_ground_enable_ground_marking_mapping) {
     return;
   }
 
   if (!map_snapshot) {
     return;
   }
-  if (parameters_->ground_mapping_enable_texture_mapping) {
+  if (parameters_->mapping_ground_enable_texture_mapping) {
     if (map_snapshot->texture.getInfo().width > 0 && map_snapshot->texture.getInfo().height > 0) {
       ground_texture_image_publisher_->publish(
         Utils::toRosImage(map_snapshot->texture, parameters_->map_frame, stamp));
-      ground_texture_coverage_publisher_->publish(
-        Utils::toCoverageMessage(map_snapshot->texture, parameters_->map_frame, stamp));
     } else {
       sensor_msgs::msg::Image empty_image;
       empty_image.header.stamp = stamp;
       empty_image.header.frame_id = parameters_->map_frame;
       empty_image.encoding = "rgb8";
       ground_texture_image_publisher_->publish(empty_image);
-
-      nav_msgs::msg::OccupancyGrid empty_coverage;
-      empty_coverage.header = empty_image.header;
-      empty_coverage.info.origin.orientation.w = 1.0;
-      ground_texture_coverage_publisher_->publish(empty_coverage);
     }
   }
 
   if (
-    parameters_->ground_mapping_enable_ground_marking_mapping &&
+    parameters_->mapping_ground_enable_ground_marking_mapping &&
     map_snapshot->marking.getInfo().width > 0 && map_snapshot->marking.getInfo().height > 0) {
     ground_marking_grid_publisher_->publish(
       Utils::toRosMessage(map_snapshot->marking, parameters_->map_frame, stamp));
@@ -1152,6 +1079,17 @@ void Ros2SlamWrapper::publishDebugImage(const rclcpp::Time & stamp)
   if (high_res_debug && !high_res_debug->pixels.empty()) {
     csm_debug_high_publisher_->publish(
       toHeatmapRosImage(high_res_debug.value(), parameters_->map_frame, stamp));
+  }
+
+  const std::optional<cv::Mat> ground_debug = slam_system_->getLatestGroundExtractionDebug();
+  if (ground_debug) {
+    cv_bridge::CvImage cv_image;
+    cv_image.header.stamp = stamp;
+    cv_image.header.frame_id = parameters_->camera_frame;
+    // binary image
+    cv_image.encoding = sensor_msgs::image_encodings::MONO8;
+    cv_image.image = ground_debug.value();
+    ground_extraction_debug_publisher_->publish(*cv_image.toImageMsg());
   }
 }
 
@@ -1209,7 +1147,7 @@ bool Ros2SlamWrapper::parseGroundRoiRatios(const std::string & value, std::vecto
 
 visualization_msgs::msg::Marker Ros2SlamWrapper::makeGroundPlaneMarker(
   const glidar_slam::core::GroundPlaneObservation & observation, const std::string & frame,
-  const rclcpp::Time & stamp, double plane_size)
+  const rclcpp::Time & stamp)
 {
   visualization_msgs::msg::Marker marker;
   marker.header.stamp = stamp;
@@ -1245,8 +1183,8 @@ visualization_msgs::msg::Marker Ros2SlamWrapper::makeGroundPlaneMarker(
   marker.pose.orientation.y = orientation.y();
   marker.pose.orientation.z = orientation.z();
   marker.pose.orientation.w = orientation.w();
-  marker.scale.x = plane_size;
-  marker.scale.y = plane_size;
+  marker.scale.x = 5.0;
+  marker.scale.y = 5.0;
   marker.scale.z = 0.01;
   marker.color.r = 0.1f;
   marker.color.g = 1.0f;

@@ -8,15 +8,18 @@ glidar_slam:
     camera_frame: camera
     base_frame: base_link
     
-    # ROS Topic Parameters
+    # ROS Topic Parameters (Publishers)
     scan_topic: /scan
     tf_topic: /tf
     odom_topic: /odometry/filtered
-    csm_debug_low_topic: glidar_slam/debug/csm_likelihood_low
-    csm_debug_high_topic: glidar_slam/debug/csm_likelihood_high
+
+    # ROS Topic Parameters (Subscribers)
     color_image_topic: /camera/color/image_raw
     aligned_depth_image_topic: /camera/aligned_depth/image_raw
     color_camera_info_topic: /camera/color/camera_info
+
+    # Synchronization Parameter
+    approx_sync_max_interval: 0.1
 
     # Odometry Covariance Override
     # [x, y, z, roll, pitch, yaw]
@@ -26,75 +29,77 @@ glidar_slam:
     minimum_travel_distance: 0.5
     minimum_travel_heading: 0.4
     unobservable_variance: 10000.0
-    
+    submap_window_size: 10
+    mode: "mapping" # "mapping" or "localization"
+
+    # Localization Parameters
+    localization_minimum_score: 0.5
+
+    ##### DEBUGGING #####
     # Visualize covariance ellipses for all keyframes instead of only the newest keyframe.
     debug_visualize_covariances: false
     # Timing diagnostics for the SLAM pipeline and loop-closure worker.
     debug_timings: false
+    # Debugging for the ground plane extraction and factor
+    ground_debug_enable: true
+    # Debugging for the ground plane matching
+    ground_matching_debug_enable: true
+    # Debugging for the loop closure detection
+    loop_debug_enable: false
 
-    # Whether the lidar scan is voxelized before use.
-    # Avoids overweighting dense points that are in close proximity to the sensor, and reduces the number of points used in scan matching.
-    lidar_voxelization_enable: false
-    # The size of the voxelization grid used to downsample the lidar scan
-    lidar_voxelization_size: 0.05
+    ##### SCAN PREPROCESSING #####
+    scan:
+      # Whether the scan is voxelized before use.
+      # Avoids overweighting dense points that are in close proximity to the sensor, and reduces the number of points used in scan matching.
+      voxelization_enable: true
+      # The size of the voxelization grid used to downsample the scan
+      voxelization_size: 0.05
+      # Whether the scan is densified by linearly interpolating between points by scan_voxelization_size
+      # In junction with scan_voxelization_enable, this can be used to create a uniformly spaced point cloud
+      densification_enable: true
 
+    ##### MAPPING #####
     # Occupancy Grid Parameters
-    occ_map_resolution: 0.05
-    occ_map_padding: 2
+    mapping:
+      occupancy:
+        resolution: 0.05
+      ground:
+        resolution: 0.02
+        enable_texture_mapping: true
+        enable_ground_marking_mapping: true
+      threshold: 200
+      log_odds_hit: 0.8
+      log_odds_miss: 0.35
+      log_odds_cap: 15.0
 
-    # Submap Parameters
-    submap_window_size: 10
-
+    #### GROUND FACTOR ####
     # Ground Observation Parameters
-    ground_debug_enable: false
-    ground_debug_cloud_topic: glidar_slam/debug/ground_inliers
-    ground_debug_marker_topic: glidar_slam/debug/ground_plane
-    ground_debug_image_topic: glidar_slam/debug/ground_overlay
-    ground_debug_plane_size: 4.0
     ground_optimization_enable: true
-    ground_observation_max_age_sec: 0.1
-    ground_minimum_inlier_count: 100
+    # Standard deviation of the ground plane normal and distance measurements. These values are used to set the covariance of the ground plane observation
     ground_normal_sigma: 0.02
     ground_distance_sigma: 0.02
-    # Weak roll/pitch/Z constraint used only when no valid plane observation is available.
-    ground_fallback_variance: 1.0
+
+    ##### GROUND EXTRACTION #####
     # [left, right, top, bottom] fractions omitted before RGB-D ground extraction.
     ground_roi_ratios: "0.0 0.0 0.2 0.4"
-
     ground_extraction_pixel_stride: 8
     ground_extraction_voxel_size: 0.1
     # The max 
-    ground_extraction_max_distance: 3.0
+    ground_extraction_max_distance: 4.0
     # Distance threshold to declare inlies during ground plane fitting. 
     # The method uses the MSCA method which is more robust against noise, so this value can be relatively large
-    ground_extraction_distance_threshold: 0.05
-    ground_mapping_enable_texture_mapping: true
-    ground_mapping_enable_ground_marking_mapping: true
-    ground_marking_map_topic: ground_markings_map
-    ground_texture_map_topic: ground_texture_map
-    ground_texture_coverage_topic: ground_texture_coverage
-    ground_map_resolution: 0.02
-    ground_map_padding: 2
-    # Adaptive-threshold pixels at or above this value are treated as white markings.
-    ground_marking_white_threshold: 200
-    ground_marking_log_odds_hit: 0.8
-    ground_marking_log_odds_miss: 0.35
-    ground_marking_log_odds_cap: 15.0
-
+    ground_extraction_distance_threshold: 0.1
+    ground_extraction_adaptive_threshold_block_size: 101
+    ground_extraction_adaptive_threshold_C: -65.0
+  
+    ##### GROUND MATCHING #####
     # Ground matching settings
     ground_matching_enable: false
-    ground_matching_minimum_marking_count: 20
     ground_matching_minimum_score: 0.5
-    ground_matching_min_forward_distance: 0.0
-    ground_matching_max_forward_distance: 2.0
-    ground_matching_csm_smear_deviation: 0.1
-    ground_matching_debug_enable: false
-    ground_matching_debug_topic: glidar_slam/debug/ground_matching
+    ground_matching_max_distance: 2.0
 
+    ##### LOOP CLOSURE #####
     #### Loop Closure Parameters
-    loop_debug_enable: false
-    loop_input_queue_capacity: 5
-    loop_output_queue_capacity: 8
     # minimum number of keyframes between query and candidate keyframes to be considered for loop closure
     loop_minimum_key_separation: 15
     # max heading difference between query and candidate keyframes to be considered for loop closure
@@ -105,11 +110,6 @@ glidar_slam:
     loop_mahalanobis_threshold: 2.0
     # minimum score for a loop closure proposal to be considered valid
     loop_minimum_score: 0.8
-
-    # Enables static-map localization after a map has been loaded. This can also be changed at
-    # runtime with `ros2 param set`; the set_localization_mode service remains available.
-    localization_mode: false
-    localization_minimum_score: 0.5
     
     #### Dynamically loaded scan matcher plugins
     csm_local_tracker:
@@ -128,17 +128,17 @@ glidar_slam:
 
     csm_ground_marking_detection:
       plugin: glidar_slam/CorrelativeScanMatcherPlugin
-      csm_smear_deviation: 0.1
+      csm_smear_deviation: 0.15
       csm_use_laplace_kernel: true
       csm_use_distance_transform: false
       csm_use_tbb: true
-      csm_debug_enable: false
-      csm_stage_resolutions: [0.05, 0.05, 0.03]
+      csm_debug_enable: true
+      csm_stage_resolutions: [0.05, 0.04, 0.02]
       csm_stage_translation_steps: [0.1, 0.01, 0.001]
-      csm_stage_window_x: [1.0, 0.15, 0.015]
-      csm_stage_window_y: [1.0, 0.15, 0.015]
+      csm_stage_window_x: [3.0, 0.15, 0.015]
+      csm_stage_window_y: [3.0, 0.15, 0.015]
       csm_stage_angular_steps: [0.1, 0.01, 0.001]
-      csm_stage_window_yaw: [1.0, 0.15, 0.015]
+      csm_stage_window_yaw: [0.8, 0.15, 0.015]
 
     csm_loop_closure_detection:
       plugin: glidar_slam/CorrelativeScanMatcherPlugin
@@ -146,7 +146,7 @@ glidar_slam:
       csm_use_laplace_kernel: true
       csm_use_distance_transform: false
       csm_use_tbb: true
-      csm_debug_enable: true
+      csm_debug_enable: false
       csm_stage_resolutions: [0.05, 0.04, 0.02]
       csm_stage_translation_steps: [0.1, 0.01, 0.001]
       csm_stage_window_x: [3.0, 0.15, 0.015]

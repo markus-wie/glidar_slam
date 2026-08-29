@@ -21,15 +21,15 @@ public:
   GroundMarkingMatcher(
     const std::shared_ptr<Parameters> & parameters, std::unique_ptr<ScanMatcher> scan_matcher);
 
-  std::vector<Point2D> extractMarkingPoints(const pcl::PointCloud<pcl::PointXYZRGBA> & cloud) const;
-  pcl::PointCloud<pcl::PointXYZRGBA> toPCL(const std::vector<Point2D> & points) const;
+  std::vector<Point2D> extractMarkingPoints(const PointCloudXYZRGBAConstPtr & cloud) const;
+  PointCloudXYZRGBAPtr toPCL(const std::vector<Point2D> & points) const;
 
-  PointCloudXYZRGBA makeDebugCloud(
+  PointCloudXYZRGBAPtr makeDebugCloud(
     const GroundPlaneObservation & reference_observation,
     const GroundPlaneObservation & current_observation, const CsmResult & result,
     const Pose2D & relative_pose) const;
 
-  PointCloudXYZRGBA makeDebugCloud(
+  PointCloudXYZRGBAPtr makeDebugCloud(
     const std::vector<Point2D> & reference_points, const std::vector<Point2D> & current_points,
     const CsmResult & result, const Pose2D & relative_pose) const;
 

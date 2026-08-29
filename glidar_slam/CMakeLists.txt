@@ -29,17 +29,18 @@ include_directories(include)
 
 add_library(${PROJECT_NAME}_core SHARED
   src/core/scan_matcher/correlative_scan_matcher.cpp
-  src/core/submap_grid.cpp
-  src/core/graph_optimizer.cpp
   src/core/scan_matcher/ground_marking_matcher.cpp
-  src/core/ground_plane_extractor.cpp
-  src/core/ground_plane_factor.cpp
   src/core/global_map/ground_marking_grid.cpp
   src/core/global_map/ground_texture_grid.cpp
+  src/core/global_map/occupancy_grid.cpp
+  src/core/utils.cpp
+  src/core/submap_grid.cpp
+  src/core/graph_optimizer.cpp
+  src/core/ground_plane_extractor.cpp
+  src/core/ground_plane_factor.cpp
   src/core/map_builder.cpp
   src/core/loop_closure.cpp
   src/core/system.cpp
-  src/core/global_map/occupancy_grid.cpp
   src/core/map_database.cpp
   src/core/camera_model.cpp
   src/core/laser_scan.cpp

@@ -69,6 +69,8 @@ public:
 
   bool restore(const std::vector<KeyFrame> & keyframes, uint64_t next_key);
 
+  void rebuildSpatialIndex();
+
 private:
   struct Edge
   {
@@ -95,8 +97,6 @@ private:
   std::vector<uint64_t> keyframe_order_;
 
   class SpatialIndex;
-
-  void rebuildSpatialIndex();
 
   mutable std::shared_mutex rw_mutex_;
 

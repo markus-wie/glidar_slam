@@ -8,6 +8,7 @@
 #include <sstream>
 
 #include "glidar_slam/core/parameters.hpp"
+#include "glidar_slam/core/types.hpp"
 #include "glidar_slam/logger/logger.hpp"
 #include "opencv2/imgproc.hpp"
 #include "pcl/filters/voxel_grid.h"
@@ -15,10 +16,9 @@
 
 namespace glidar_slam::core {
 
-std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
+GroundPlaneExtractor::Result GroundPlaneExtractor::extract(
   const cv::Mat & bgr_image, const cv::Mat & depth_image, const CameraIntrinsics & intrinsics,
-  const Eigen::Affine3f & base_from_camera, const Parameters & parameters,
-  std::string * failure_reason)
+  const Eigen::Affine3f & base_from_camera, const Parameters & parameters)
 {
   double start_timestamp = 0.0;
   double initialization_timestamp = 0.0;
@@ -34,11 +34,8 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
 
   const std::vector<float> & roi_ratios = parameters.ground_roi_ratios;
 
-  const auto reject = [failure_reason](const std::string & reason) {
-    if (failure_reason != nullptr) {
-      *failure_reason = reason;
-    }
-    return std::optional<GroundPlaneObservation>{};
+  const auto reject = [](const std::string & r) mutable {
+    return GroundPlaneExtractor::Result{std::nullopt, r, cv::Mat{}};
   };
 
   if (
@@ -68,11 +65,13 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
   // Precompute unprojection rays to eliminate divisions and subtractions inside the loops
   std::vector<float> ray_x(last_col);
   for (int col = first_col; col < last_col; ++col) {
-    ray_x[col] = static_cast<float>((static_cast<double>(col) - intrinsics.cx) / intrinsics.fx);
+    ray_x[col] =
+      static_cast<float>((static_cast<double>(col) + 0.5 - intrinsics.cx) / intrinsics.fx);
   }
   std::vector<float> ray_y(last_row);
   for (int row = first_row; row < last_row; ++row) {
-    ray_y[row] = static_cast<float>((static_cast<double>(row) - intrinsics.cy) / intrinsics.fy);
+    ray_y[row] =
+      static_cast<float>((static_cast<double>(row) + 0.5 - intrinsics.cy) / intrinsics.fy);
   }
 
   // binarize the roi
@@ -81,11 +80,12 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
   cv::Mat binary;
   cv::cvtColor(bgr_image(roi), grayscale, cv::COLOR_BGR2GRAY);
   cv::adaptiveThreshold(
-    grayscale, binary, 255, cv::ADAPTIVE_THRESH_MEAN_C, cv::THRESH_BINARY, 101, -65.0);
+    grayscale, binary, 255, cv::ADAPTIVE_THRESH_MEAN_C, cv::THRESH_BINARY,
+    parameters.ground_extraction_adaptive_threshold_block_size,
+    parameters.ground_extraction_adaptive_threshold_C);
 
   const int stride = parameters.ground_extraction_pixel_stride;
-  pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud =
-    std::make_shared<pcl::PointCloud<pcl::PointXYZRGBA>>();
+  PointCloudXYZRGBAPtr cloud = std::make_shared<PointCloudXYZRGBA>();
   cloud->reserve(
     (static_cast<std::size_t>(last_row - first_row) / stride + 1) *
     (static_cast<std::size_t>(last_col - first_col) / stride + 1));
@@ -139,8 +139,7 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
     return reject("no point were able to be extracted");
   }
 
-  pcl::PointCloud<pcl::PointXYZRGBA>::Ptr voxelized_cloud =
-    std::make_shared<pcl::PointCloud<pcl::PointXYZRGBA>>();
+  PointCloudXYZRGBAPtr voxelized_cloud = std::make_shared<PointCloudXYZRGBA>();
   pcl::VoxelGrid<pcl::PointXYZRGBA> voxel_filter;
   voxel_filter.setInputCloud(cloud);
   voxel_filter.setLeafSize(
@@ -189,66 +188,53 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
   observation.distance_to_base = distance;
 
   if (parameters.ground_debug_enable) {
-    observation.pcl.reserve(inliers.indices.size());
+    observation.ground_cloud_sparse->reserve(inliers.indices.size());
     for (const int index : inliers.indices) {
       const pcl::PointXYZRGBA & point = voxelized_cloud->points.at(static_cast<std::size_t>(index));
-      observation.pcl.push_back(pcl::PointXYZ{point.x, point.y, point.z});
+      observation.ground_cloud_sparse->push_back(pcl::PointXYZ{point.x, point.y, point.z});
     }
-    observation.pcl.width = static_cast<std::uint32_t>(observation.pcl.size());
-    observation.pcl.height = 1;
-    observation.pcl.is_dense = true;
+    observation.ground_cloud_sparse->width =
+      static_cast<std::uint32_t>(observation.ground_cloud_sparse->size());
+    observation.ground_cloud_sparse->height = 1;
+    observation.ground_cloud_sparse->is_dense = true;
   }
 
-  // Dense Extraction
-  // transform the plane equation to the camera frame
-  const Eigen::Vector3f n_cam = base_from_camera.linear().transpose() * normal;
-  const float d_cam = normal.dot(base_from_camera.translation()) + distance;
-  const float dist_thresh = static_cast<float>(parameters.ground_extraction_distance_threshold);
+  const Eigen::Matrix3f R_base_cam = base_from_camera.rotation();
+  const Eigen::Vector3f t_base_cam = base_from_camera.translation();
 
-  // Pre-multiply ray directions with camera normal components to strip away operations from the
-  // inner loop
-  std::vector<float> col_dot(last_col);
-  for (int col = first_col; col < last_col; ++col) {
-    col_dot[col] = n_cam.x() * ray_x[col];
-  }
+  const Eigen::Vector3f n_cam = R_base_cam.transpose() * normal;
+  const float d_cam = normal.dot(t_base_cam) + distance;
 
-  std::vector<float> row_dot(last_row);
+  // Precompute row and column factors for the dot product
+  // n_cam^T * P_cam = z * (ray_x * n_cam.x + ray_y * n_cam.y + n_cam.z)
+  std::vector<float> row_factor(last_row);
   for (int row = first_row; row < last_row; ++row) {
-    row_dot[row] = n_cam.y() * ray_y[row] + n_cam.z();
+    row_factor[row] = ray_y[row] * n_cam.y() + n_cam.z();
+  }
+  std::vector<float> col_factor(last_col);
+  for (int col = first_col; col < last_col; ++col) {
+    col_factor[col] = ray_x[col] * n_cam.x();
   }
 
-  int dynamic_first_row = first_row;
+  // Dense extraction
+  PointCloudXYZRGBAPtr dense_ground_cloud = std::make_shared<PointCloudXYZRGBA>();
+  dense_ground_cloud->reserve(
+    static_cast<std::size_t>(last_row - first_row) * (last_col - first_col));
 
-  if (std::abs(n_cam.y()) > 1e-4f) {
-    const float ray_x_left = ray_x[first_col];
-    const float ray_x_right = ray_x[last_col - 1];
+  // Re-use your threshold or define a tighter one for the dense pass
+  const float dense_dist_thresh =
+    static_cast<float>(parameters.ground_extraction_distance_threshold);
 
-    const float ray_y_left = -(n_cam.x() * ray_x_left + n_cam.z()) / n_cam.y();
-    const float ray_y_right = -(n_cam.x() * ray_x_right + n_cam.z()) / n_cam.y();
+  std::size_t valid_point_count = 0;
 
-    const int horizon_row_left = static_cast<int>(intrinsics.cy + intrinsics.fy * ray_y_left);
-    const int horizon_row_right = static_cast<int>(intrinsics.cy + intrinsics.fy * ray_y_right);
-
-    // The ground plane is entirely below the highest point of the horizon line
-    const int min_horizon_row = std::min(horizon_row_left, horizon_row_right);
-
-    // We can safely clamp our starting row to this horizon bound
-    dynamic_first_row = std::max(first_row, min_horizon_row);
-    // Ensure we don't overshoot if the entire ROI is above the horizon
-    dynamic_first_row = std::min(dynamic_first_row, last_row);
-  }
-
-  // Reserve a generous heuristic size to minimize reallocations
-  observation.ground_cloud.reserve((last_row - dynamic_first_row) * (last_col - first_col) / 2);
-
-  for (int row = dynamic_first_row; row < last_row; ++row) {
+  for (int row = first_row; row < last_row; ++row) {
     const cv::Vec3b * bgr_row = bgr_image.ptr<cv::Vec3b>(row);
     const std::uint8_t * binary_row = binary.ptr<std::uint8_t>(row - first_row);
     const std::uint16_t * depth_row_u16 =
       depth_is_u16 ? depth_image.ptr<std::uint16_t>(row) : nullptr;
     const float * depth_row_f32 = depth_is_u16 ? nullptr : depth_image.ptr<float>(row);
 
-    const float r_dot = row_dot[row];
+    const float rf = row_factor[row];
     const float ry = ray_y[row];
 
     for (int col = first_col; col < last_col; ++col) {
@@ -259,43 +245,45 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
         continue;
       }
 
-      // Early rejection distance check: 1 add, 1 mult, 1 add, 1 abs.
-      const float pt_distance = (col_dot[col] + r_dot) * z + d_cam;
-      if (std::abs(pt_distance) > dist_thresh) {
-        continue;
+      valid_point_count++;
+
+      // Point-to-plane distance in camera frame using precomputed factors
+      const float point_plane_dist = std::abs(z * (col_factor[col] + rf) + d_cam);
+
+      // Only evaluate 3D projection if the pixel is actually on the plane
+      if (point_plane_dist < dense_dist_thresh) {
+        const float x = ray_x[col] * z;
+        const float y = ry * z;
+
+        if ((x * x + y * y + z * z) > max_depth_sq) {
+          continue;
+        }
+
+        const Eigen::Vector3f point_in_camera(x, y, z);
+        const Eigen::Vector3f point_in_base = base_from_camera * point_in_camera;
+
+        pcl::PointXYZRGBA point;
+        point.x = point_in_base.x();
+        point.y = point_in_base.y();
+        point.z = point_in_base.z();
+        const cv::Vec3b & color = bgr_row[col];
+        point.r = color[2];
+        point.g = color[1];
+        point.b = color[0];
+        point.a = binary_row[col - first_col];
+        dense_ground_cloud->push_back(point);
       }
-
-      const float x = ray_x[col] * z;
-      const float y = ry * z;
-
-      // Validate threshold against max distance
-      if ((x * x + y * y + z * z) > max_depth_sq) {
-        continue;
-      }
-
-      // We only run the expensive matrix transform on points proven to be inliers
-      const Eigen::Vector3f point_in_base = base_from_camera * Eigen::Vector3f(x, y, z);
-
-      pcl::PointXYZRGBA point;
-      point.x = point_in_base.x();
-      point.y = point_in_base.y();
-      point.z = point_in_base.z();
-      const cv::Vec3b & color = bgr_row[col];
-      point.r = color[2];
-      point.g = color[1];
-      point.b = color[0];
-      point.a = binary_row[col - first_col];
-      observation.ground_cloud.push_back(point);
     }
   }
 
   dense_extraction_timestamp = timestamp();
 
-  observation.point_count = (last_row - dynamic_first_row) * (last_col - first_col);
-  observation.inlier_count = observation.ground_cloud.size();
-  observation.ground_cloud.width = static_cast<std::uint32_t>(observation.ground_cloud.size());
-  observation.ground_cloud.height = 1;
-  observation.ground_cloud.is_dense = true;
+  observation.point_count = valid_point_count;
+  observation.inlier_count = dense_ground_cloud->size();
+  observation.ground_cloud = dense_ground_cloud;
+  observation.ground_cloud->width = static_cast<std::uint32_t>(observation.ground_cloud->size());
+  observation.ground_cloud->height = 1;
+  observation.ground_cloud->is_dense = true;
 
   if (parameters.debug_timings) {
     SAM_INFO(
@@ -308,7 +296,12 @@ std::optional<GroundPlaneObservation> GroundPlaneExtractor::extract(
       (dense_extraction_timestamp - segmentation_timestamp) * 1000.0);
   }
 
-  return observation;
+  GroundPlaneExtractor::Result result;
+  result.observation = observation;
+  result.failure_reason = "";
+  result.debug_image = binary;
+
+  return result;
 }
 
 }  // namespace glidar_slam::core

@@ -166,7 +166,7 @@ CsmResult CorrelativeScanMatcher::match(
         stage_index, stage_result.center.x, stage_result.center.y, stage_result.center.yaw,
         stage_result.best_pose.x, stage_result.best_pose.y, stage_result.best_pose.yaw,
         stage_result.best_score, stage_result.candidate_count, best_pose.x - pose_estimate.x,
-        best_pose.y - pose_estimate.y, Utils::normalizeAngle(best_pose.yaw - pose_estimate.yaw));
+        best_pose.y - pose_estimate.y, utils::normalizeAngle(best_pose.yaw - pose_estimate.yaw));
     }
   }
 
@@ -335,7 +335,7 @@ void CorrelativeScanMatcher::selectBestPose(SearchResult & result)
   double theta_cos = 0.0;
   std::size_t theta_count = 0;
   for (const auto & response : result.responses) {
-    if (Utils::DoubleEqual(response.score, result.best_score)) {
+    if (utils::doubleEqual(response.score, result.best_score)) {
       theta_x += response.pose.x;
       theta_y += response.pose.y;
       theta_sin += std::sin(response.pose.yaw);
@@ -478,7 +478,7 @@ Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
       std::abs(response.pose.y - fine_result.best_pose.y) > cell_tolerance) {
       continue;
     }
-    const double angle_delta = Utils::normalizeAngle(response.pose.yaw - fine_result.best_pose.yaw);
+    const double angle_delta = utils::normalizeAngle(response.pose.yaw - fine_result.best_pose.yaw);
     angular_norm += response.score;
     angular_variance += angle_delta * angle_delta * response.score;
   }

@@ -42,16 +42,12 @@ public:
     double timestamp, const SensorData & sensor_data, const gtsam::Pose3 & odom_pose,
     const gtsam::Matrix66 & odom_covariance);
 
-  gtsam::Pose3 getLatestPose() const;
   PoseEstimate getLatestPoseAndCovariance() const;
   std::optional<CsmResult::DebugImage> getLatestLowResDebug() const;
   std::optional<CsmResult::DebugImage> getLatestHighResDebug() const;
   std::optional<GroundPlaneObservation> getLatestGroundObservation() const;
-  std::optional<PointCloudXYZRGBA> getLatestGroundMatchingDebug() const;
-
-  PointCloudXYZ getMapCloud() const;
-  std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> getTransformedKeyFrameScans() const;
-  std::vector<pcl::PointCloud<pcl::PointXYZRGBA>> getTransformedGroundClouds() const;
+  PointCloudXYZRGBAConstPtr getLatestGroundMatchingDebug() const;
+  std::optional<cv::Mat> getLatestGroundExtractionDebug() const;
 
   std::vector<std::shared_ptr<const KeyFrame>> getKeyFrames() const;
   std::vector<std::pair<uint64_t, uint64_t>> getLoopClosures() const;
@@ -108,7 +104,8 @@ private:
   std::optional<CsmResult::DebugImage> latest_low_res_debug_;
   std::optional<CsmResult::DebugImage> latest_high_res_debug_;
   std::optional<GroundPlaneObservation> latest_ground_observation_;
-  std::optional<PointCloudXYZRGBA> latest_ground_matching_debug_;
+  PointCloudXYZRGBAPtr latest_ground_matching_debug_;
+  std::optional<cv::Mat> latest_ground_extraction_debug_;
 
   bool loop_closure_optimization_pending_{false};
   bool tracking_reset_pending_{false};

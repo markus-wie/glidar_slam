@@ -7,7 +7,7 @@
 namespace glidar_slam::core::global_map {
 
 GroundMarkingGrid::GroundMarkingGrid(const std::shared_ptr<Parameters> & parameters)
-: GlobalMap(parameters->ground_map_resolution), parameters_(parameters)
+: GlobalMap(parameters->mapping_ground_resolution), parameters_(parameters)
 {
 }
 

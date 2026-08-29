@@ -23,7 +23,7 @@ struct CsmResult
   Pose2D optimized_pose;
   double score;
   Eigen::Matrix3d covariance;
-  struct DebugImage
+  struct DebugImage  // TODO: replace with cv::Mat
   {
     std::vector<std::uint8_t> pixels;
     double origin_x = 0.0;

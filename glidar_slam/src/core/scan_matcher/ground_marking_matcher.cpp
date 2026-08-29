@@ -15,28 +15,31 @@ GroundMarkingMatcher::GroundMarkingMatcher(
 }
 
 std::vector<Point2D> GroundMarkingMatcher::extractMarkingPoints(
-  const pcl::PointCloud<pcl::PointXYZRGBA> & cloud) const
+  const PointCloudXYZRGBAConstPtr & cloud) const
 {
+  const int max_depth_sq =
+    parameters_->ground_matching_max_distance * parameters_->ground_matching_max_distance;
+
   std::vector<Point2D> points;
-  points.reserve(cloud.size());
-  for (const auto & point : cloud) {
-    if (
-      point.a < parameters_->ground_marking_white_threshold || !std::isfinite(point.x) ||
-      !std::isfinite(point.y) || !std::isfinite(point.z) ||
-      point.x < parameters_->ground_matching_min_forward_distance ||
-      point.x > parameters_->ground_matching_max_forward_distance) {
+  points.reserve(cloud->size());
+  for (const auto & point : *cloud) {
+    if (point.a < parameters_->mapping_threshold) {
       continue;
     }
+
+    if ((point.x * point.x + point.y * point.y + point.z * point.z) > max_depth_sq) {
+      continue;
+    }
+
     points.push_back({point.x, point.y});
   }
   return points;
 }
 
-pcl::PointCloud<pcl::PointXYZRGBA> GroundMarkingMatcher::toPCL(
-  const std::vector<Point2D> & points) const
+PointCloudXYZRGBAPtr GroundMarkingMatcher::toPCL(const std::vector<Point2D> & points) const
 {
-  pcl::PointCloud<pcl::PointXYZRGBA> cloud;
-  cloud.reserve(points.size());
+  PointCloudXYZRGBAPtr cloud = std::make_shared<PointCloudXYZRGBA>();
+  cloud->reserve(points.size());
   for (const auto & point : points) {
     pcl::PointXYZRGBA pcl_point;
     pcl_point.x = static_cast<float>(point.x);
@@ -46,15 +49,15 @@ pcl::PointCloud<pcl::PointXYZRGBA> GroundMarkingMatcher::toPCL(
     pcl_point.g = 255;
     pcl_point.b = 255;
     pcl_point.a = 255;
-    cloud.push_back(pcl_point);
+    cloud->push_back(pcl_point);
   }
-  cloud.width = static_cast<std::uint32_t>(cloud.size());
-  cloud.height = 1;
-  cloud.is_dense = true;
+  cloud->width = static_cast<std::uint32_t>(cloud->size());
+  cloud->height = 1;
+  cloud->is_dense = true;
   return cloud;
 }
 
-PointCloudXYZRGBA GroundMarkingMatcher::makeDebugCloud(
+PointCloudXYZRGBAPtr GroundMarkingMatcher::makeDebugCloud(
   const GroundPlaneObservation & reference_observation,
   const GroundPlaneObservation & current_observation, const CsmResult & result,
   const Pose2D & relative_pose) const
@@ -64,15 +67,15 @@ PointCloudXYZRGBA GroundMarkingMatcher::makeDebugCloud(
   return makeDebugCloud(reference_points, current_points, result, relative_pose);
 }
 
-PointCloudXYZRGBA GroundMarkingMatcher::makeDebugCloud(
+PointCloudXYZRGBAPtr GroundMarkingMatcher::makeDebugCloud(
   const std::vector<Point2D> & reference_points, const std::vector<Point2D> & current_points,
   const CsmResult & result, const Pose2D & relative_pose) const
 {
   const std::vector<Point2D> filtered_current_points =
     filterCurrentPoints(reference_points, current_points, relative_pose);
 
-  PointCloudXYZRGBA debug_cloud;
-  debug_cloud.reserve(reference_points.size() + 2 * filtered_current_points.size());
+  PointCloudXYZRGBAPtr debug_cloud = std::make_shared<PointCloudXYZRGBA>();
+  debug_cloud->reserve(reference_points.size() + 2 * filtered_current_points.size());
   for (const auto & point : reference_points) {
     pcl::PointXYZRGBA debug_point;
     debug_point.x = static_cast<float>(point.x);
@@ -82,7 +85,7 @@ PointCloudXYZRGBA GroundMarkingMatcher::makeDebugCloud(
     debug_point.g = 60;
     debug_point.b = 60;
     debug_point.a = 255;
-    debug_cloud.push_back(debug_point);
+    debug_cloud->push_back(debug_point);
   }
 
   const double cosine = std::cos(result.optimized_pose.yaw);
@@ -96,7 +99,7 @@ PointCloudXYZRGBA GroundMarkingMatcher::makeDebugCloud(
     debug_point.g = 255;
     debug_point.b = 60;
     debug_point.a = 255;
-    debug_cloud.push_back(debug_point);
+    debug_cloud->push_back(debug_point);
   }
 
   const double odometry_cosine = std::cos(relative_pose.yaw);
@@ -112,11 +115,11 @@ PointCloudXYZRGBA GroundMarkingMatcher::makeDebugCloud(
     debug_point.g = 60;
     debug_point.b = 255;
     debug_point.a = 255;
-    debug_cloud.push_back(debug_point);
+    debug_cloud->push_back(debug_point);
   }
-  debug_cloud.width = static_cast<std::uint32_t>(debug_cloud.size());
-  debug_cloud.height = 1;
-  debug_cloud.is_dense = true;
+  debug_cloud->width = static_cast<std::uint32_t>(debug_cloud->size());
+  debug_cloud->height = 1;
+  debug_cloud->is_dense = true;
   return debug_cloud;
 }
 
@@ -143,11 +146,12 @@ std::vector<Point2D> GroundMarkingMatcher::filterCurrentPoints(
   const std::vector<Point2D> & reference_points, const std::vector<Point2D> & current_points,
   const Pose2D & relative_pose) const
 {
-  const auto minimum_marking_count = static_cast<std::vector<Point2D>::size_type>(
-    parameters_->ground_matching_minimum_marking_count);
+  // arbitrarily chosen threshold under which matching should not be attempted
+  constexpr std::size_t MINIMUM_MARKING_COUNT = 25;
+
   if (
-    reference_points.size() < minimum_marking_count ||
-    current_points.size() < minimum_marking_count) {
+    reference_points.size() < MINIMUM_MARKING_COUNT ||
+    current_points.size() < MINIMUM_MARKING_COUNT) {
     return {};
   }
 
@@ -190,7 +194,7 @@ std::vector<Point2D> GroundMarkingMatcher::filterCurrentPoints(
   }
 
   // Ensure we still have enough points after cropping
-  if (filtered_current_points.size() < minimum_marking_count) {
+  if (filtered_current_points.size() < MINIMUM_MARKING_COUNT) {
     return {};
   }
 

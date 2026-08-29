@@ -17,6 +17,9 @@
 
 namespace glidar_slam::core {
 
+// Arbitrary limit on the number of input and output queues
+constexpr int MAX_QUEUE_SIZE = 10;
+
 LoopClosureDetector::LoopClosureDetector(
   const std::shared_ptr<Parameters> & parameters, const std::shared_ptr<MapDatabase> & map_database,
   std::unique_ptr<ScanMatcher> scan_matcher)
@@ -131,13 +134,12 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
       } else {
         const gtsam::Pose3 neighbor_in_candidate =
           candidate->pose.inverse().compose(neighbor->pose);
-        points = Utils::transformScanPoints(neighbor->scan->points2D(), neighbor_in_candidate);
+        points = utils::transformScanPoints(neighbor->scan->points2D(), neighbor_in_candidate);
       }
       submap_grid.add(points, neighbor->key);
     }
 
-    const Pose2D pose_estimate = Utils::toPose2D(candidate->pose.between(
-      query.pose));  // Utils::toPose2D(query.pose.inverse().compose(candidate->pose));
+    const Pose2D pose_estimate = utils::toPose2D(candidate->pose.between(query.pose));
 
     const CsmResult result =
       scan_matcher_->match(submap_grid, query.scan->points2D(), pose_estimate);
@@ -185,7 +187,7 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
       proposal.from_key = candidate->key;
       proposal.to_key = query.key;
 
-      proposal.relative_pose = Utils::toPose3(constrained_pose);
+      proposal.relative_pose = utils::toPose3(constrained_pose);
       proposal.covariance = gtsam::Matrix66::Zero();
 
       proposal.covariance(0, 0) = parameters_->unobservable_variance;
@@ -351,7 +353,7 @@ bool LoopClosureDetector::submit(KeyFrame snapshot)
     return false;
   }
 
-  if (input_queue_.size() >= parameters_->loop_input_queue_capacity) {
+  if (input_queue_.size() >= MAX_QUEUE_SIZE) {
     SAM_INFO("Loop input queue full; dropping oldest snapshot");
     input_queue_.pop_front();
   }
@@ -403,7 +405,7 @@ void LoopClosureDetector::run()
     {
       std::lock_guard<std::mutex> lock(mutex_);
       for (auto & proposal : proposals) {
-        if (output_queue_.size() >= parameters_->loop_output_queue_capacity) {
+        if (output_queue_.size() >= MAX_QUEUE_SIZE) {
           SAM_INFO("Loop output queue full; dropping oldest proposal");
           output_queue_.pop_front();
         }

@@ -7,6 +7,7 @@
 
 #include "glidar_slam/core/global_map.hpp"
 #include "glidar_slam/core/parameters.hpp"
+#include "glidar_slam/core/types.hpp"
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
 

@@ -38,7 +38,6 @@ namespace glidar_slam::ros2 {
 
 using glidar_slam::core::KeyFrame;
 using glidar_slam::core::Parameters;
-using glidar_slam::core::PointCloudXYZ;
 using glidar_slam::core::SlamSystem;
 using GraphEdge = glidar_slam::core::MapDatabase::GraphEdge;
 
@@ -92,13 +91,6 @@ private:
   rcl_interfaces::msg::SetParametersResult onParametersChanged(
     const std::vector<rclcpp::Parameter> & parameters);
 
-  bool buildOccupancyGrid(
-    const PointCloudXYZ & map_cloud, nav_msgs::msg::OccupancyGrid & grid,
-    const rclcpp::Time & stamp) const;
-  bool buildOccupancyGrid(
-    const std::vector<std::pair<gtsam::Pose3, PointCloudXYZ>> & scans_transformed,
-    nav_msgs::msg::OccupancyGrid & grid, const rclcpp::Time & stamp) const;
-
   std::unique_ptr<ScanMatcherInterface> loadScanMatcher(const std::string & name);
 
   static geometry_msgs::msg::TransformStamped poseToTransformStamped(
@@ -113,7 +105,7 @@ private:
 
   static visualization_msgs::msg::Marker makeGroundPlaneMarker(
     const glidar_slam::core::GroundPlaneObservation & observation, const std::string & frame,
-    const rclcpp::Time & stamp, double plane_size);
+    const rclcpp::Time & stamp);
 
   static visualization_msgs::msg::Marker makeGroundNormalMarker(
     const glidar_slam::core::GroundPlaneObservation & observation, const std::string & frame,
@@ -174,7 +166,6 @@ private:
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr occupancy_grid_publisher_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr ground_marking_grid_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr ground_texture_image_publisher_;
-  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr ground_texture_coverage_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_debug_cloud_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_initial_debug_cloud_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_matching_debug_publisher_;
@@ -182,6 +173,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr ground_debug_image_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr csm_debug_low_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr csm_debug_high_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr ground_extraction_debug_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr estimated_pose_pub_;
 
   rclcpp::TimerBase::SharedPtr transform_broadcast_timer_;

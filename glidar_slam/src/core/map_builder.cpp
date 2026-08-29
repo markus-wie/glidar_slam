@@ -211,8 +211,10 @@ void MapBuilder::apply(const KeyFrame & keyframe)
     if (!std::isfinite(point.x()) || !std::isfinite(point.y())) {
       continue;
     }
-    const int world_x = static_cast<int>(std::floor(point.x() / parameters_->occ_map_resolution));
-    const int world_y = static_cast<int>(std::floor(point.y() / parameters_->occ_map_resolution));
+    const int world_x =
+      static_cast<int>(std::floor(point.x() / parameters_->mapping_occupancy_resolution));
+    const int world_y =
+      static_cast<int>(std::floor(point.y() / parameters_->mapping_occupancy_resolution));
     const int evidence = local_cell.evidence;
     evidence_[cellKey(world_x, world_y)] += evidence;
     applied.cells.push_back({world_x, world_y, evidence});
@@ -227,9 +229,9 @@ void MapBuilder::apply(const KeyFrame & keyframe)
       continue;
     }
     const int world_x =
-      static_cast<int>(std::floor(point.x() / parameters_->ground_map_resolution));
+      static_cast<int>(std::floor(point.x() / parameters_->mapping_ground_resolution));
     const int world_y =
-      static_cast<int>(std::floor(point.y() / parameters_->ground_map_resolution));
+      static_cast<int>(std::floor(point.y() / parameters_->mapping_ground_resolution));
     const auto key = cellKey(world_x, world_y);
     marking_[key] += local_cell.log_odds;
     auto & texture = texture_[key];
@@ -246,7 +248,7 @@ void MapBuilder::apply(const KeyFrame & keyframe)
 
 void MapBuilder::publish()
 {
-  if (parameters_->occ_map_resolution <= 0.0) {
+  if (parameters_->mapping_occupancy_resolution <= 0.0) {
     return;
   }
 
@@ -269,20 +271,18 @@ void MapBuilder::publish()
     OccupancyGrid(parameters_), GroundMarkingGrid(parameters_), GroundTextureGrid(parameters_),
     generation_ + 1});
   if (min_x <= max_x && min_y <= max_y) {
-    const int padding = parameters_->occ_map_padding;
     GlobalMap::Info info;
-    info.resolution = parameters_->occ_map_resolution;
-    info.origin_x = static_cast<double>(min_x - padding) * info.resolution;
-    info.origin_y = static_cast<double>(min_y - padding) * info.resolution;
-    info.width = static_cast<std::uint32_t>(max_x - min_x + 1 + 2 * padding);
-    info.height = static_cast<std::uint32_t>(max_y - min_y + 1 + 2 * padding);
+    info.resolution = parameters_->mapping_occupancy_resolution;
+    info.origin_x = static_cast<double>(min_x) * info.resolution;
+    info.origin_y = static_cast<double>(min_y) * info.resolution;
+    info.width = static_cast<std::uint32_t>(max_x - min_x + 1);
+    info.height = static_cast<std::uint32_t>(max_y - min_y + 1);
     std::vector<std::int8_t> data(
       static_cast<std::size_t>(info.width) * static_cast<std::size_t>(info.height), -1);
     for (const auto & [key, value] : evidence_) {
       const int x = static_cast<int>(key >> 32);
       const int y = static_cast<int>(static_cast<std::int32_t>(key & 0xffffffff));
-      const std::size_t index =
-        static_cast<std::size_t>(y - min_y + padding) * info.width + (x - min_x + padding);
+      const std::size_t index = static_cast<std::size_t>(y - min_y) * info.width + (x - min_x);
       data[index] = value < 0 ? 0 : 100;
     }
     snapshot->occupancy.setGrid(info, std::move(data));
@@ -312,40 +312,37 @@ void MapBuilder::publish()
   int ground_max_x = 0;
   int ground_max_y = 0;
   if (groundBounds(marking_, ground_min_x, ground_min_y, ground_max_x, ground_max_y)) {
-    const int padding = parameters_->ground_map_padding;
     GlobalMap::Info info;
-    info.resolution = parameters_->ground_map_resolution;
-    info.origin_x = static_cast<double>(ground_min_x - padding) * info.resolution;
-    info.origin_y = static_cast<double>(ground_min_y - padding) * info.resolution;
-    info.width = static_cast<std::uint32_t>(ground_max_x - ground_min_x + 1 + 2 * padding);
-    info.height = static_cast<std::uint32_t>(ground_max_y - ground_min_y + 1 + 2 * padding);
+    info.resolution = parameters_->mapping_ground_resolution;
+    info.origin_x = static_cast<double>(ground_min_x) * info.resolution;
+    info.origin_y = static_cast<double>(ground_min_y) * info.resolution;
+    info.width = static_cast<std::uint32_t>(ground_max_x - ground_min_x + 1);
+    info.height = static_cast<std::uint32_t>(ground_max_y - ground_min_y + 1);
     const std::size_t count = static_cast<std::size_t>(info.width) * info.height;
     std::vector<std::int8_t> marking(count, 0);
     std::vector<std::uint8_t> rgb(count * 3U, 0);
-    std::vector<std::int8_t> coverage(count, -1);
     for (const auto & [key, value] : marking_) {
       const int x = static_cast<int>(key >> 32);
       const int y = static_cast<int>(static_cast<std::int32_t>(key & 0xffffffff));
-      const std::size_t index = static_cast<std::size_t>(y - ground_min_y + padding) * info.width +
-                                (x - ground_min_x + padding);
+      const std::size_t index =
+        static_cast<std::size_t>(y - ground_min_y) * info.width + (x - ground_min_x);
       marking[index] = value > 0.0F ? 100 : 0;
     }
     for (const auto & [key, value] : texture_) {
       const int x = static_cast<int>(key >> 32);
       const int y = static_cast<int>(static_cast<std::int32_t>(key & 0xffffffff));
-      const std::size_t index = static_cast<std::size_t>(y - ground_min_y + padding) * info.width +
-                                (x - ground_min_x + padding);
+      const std::size_t index =
+        static_cast<std::size_t>(y - ground_min_y) * info.width + (x - ground_min_x);
       if (value.count > 0) {
         rgb[index * 3U] = static_cast<std::uint8_t>((value.r + value.count / 2U) / value.count);
         rgb[index * 3U + 1U] =
           static_cast<std::uint8_t>((value.g + value.count / 2U) / value.count);
         rgb[index * 3U + 2U] =
           static_cast<std::uint8_t>((value.b + value.count / 2U) / value.count);
-        coverage[index] = 100;
       }
     }
     snapshot->marking.setGrid(info, std::move(marking));
-    snapshot->texture.setGrid(info, std::move(rgb), std::move(coverage));
+    snapshot->texture.setGrid(info, std::move(rgb));
   }
   ++generation_;
   snapshot->generation = generation_;
@@ -353,7 +350,7 @@ void MapBuilder::publish()
   latest_ = std::move(snapshot);
 }
 
-LocalMapData MapBuilder::buildLocalOccupancy(const PointCloudXYZ & scan, double resolution)
+LocalMapData MapBuilder::buildLocalOccupancy(const PointCloudXYZConstPtr & scan, double resolution)
 {
   LocalMapData result;
   result.resolution = resolution;
@@ -362,7 +359,7 @@ LocalMapData MapBuilder::buildLocalOccupancy(const PointCloudXYZ & scan, double 
   }
 
   std::unordered_map<std::int64_t, int> evidence;
-  for (const auto & point : scan.points) {
+  for (const auto & point : scan->points) {
     if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
       continue;
     }
@@ -393,25 +390,24 @@ LocalMapData MapBuilder::buildLocalOccupancy(const PointCloudXYZ & scan, double 
 }
 
 void MapBuilder::addLocalGroundMap(
-  LocalMapData & data, const PointCloudXYZRGBA & cloud, const Parameters & parameters)
+  LocalMapData & data, const PointCloudXYZRGBAConstPtr & cloud, const Parameters & parameters)
 {
-  data.ground_resolution = parameters.ground_map_resolution;
+  data.ground_resolution = parameters.mapping_ground_resolution;
   if (data.ground_resolution <= 0.0) {
     return;
   }
-  const float hit = static_cast<float>(std::log(
-    parameters.ground_marking_log_odds_hit / (1.0 - parameters.ground_marking_log_odds_hit)));
-  const float miss = static_cast<float>(std::log(
-    parameters.ground_marking_log_odds_miss / (1.0 - parameters.ground_marking_log_odds_miss)));
-  for (const auto & point : cloud.points) {
+  const float hit = static_cast<float>(
+    std::log(parameters.mapping_log_odds_hit / (1.0 - parameters.mapping_log_odds_hit)));
+  const float miss = static_cast<float>(
+    std::log(parameters.mapping_log_odds_miss / (1.0 - parameters.mapping_log_odds_miss)));
+  for (const auto & point : cloud->points) {
     if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
       continue;
     }
     data.ground_cells.push_back(
       {static_cast<int>(std::floor(point.x / data.ground_resolution)),
        static_cast<int>(std::floor(point.y / data.ground_resolution)),
-       point.a >= parameters.ground_marking_white_threshold ? hit : miss, point.r, point.g,
-       point.b});
+       point.a >= parameters.mapping_threshold ? hit : miss, point.r, point.g, point.b});
   }
 }
 

@@ -28,65 +28,75 @@ struct Parameters
   std::string scan_topic{"/scan"};
   std::string tf_topic{"/tf"};
   std::string odom_topic{"/odometry/filtered"};
-  std::string csm_debug_low_topic{"/glidar_slam/debug/csm_likelihood_low"};
-  std::string csm_debug_high_topic{"/glidar_slam/debug/csm_likelihood_high"};
+
+  // ROS Topic Parameters (Subscribers)
   std::string color_image_topic{"/camera/color/image_raw"};
   std::string aligned_depth_image_topic{"/camera/aligned_depth/image_raw"};
   std::string color_camera_info_topic{"/camera/color/camera_info"};
 
+  // Synchronization Parameter
+  double approx_sync_max_interval{0.1};
+
+  // Odometry Covariance Override [x, y, z, roll, pitch, yaw]
   std::vector<double> odom_covariance_diagonal{-1.0, -1.0, -1.0, -1.0, -1.0, -1.0};
 
   // General Parameters
   double minimum_travel_distance{0.5};
   double minimum_travel_heading{0.5};
   double unobservable_variance{1e6};
-  bool debug_visualize_covariances{false};
-
-  bool lidar_voxelization_enable{true};
-  double lidar_voxelization_size{0.2};
-
-  // Occupancy Grid Parameters
-  double occ_map_resolution{0.05};
-  int occ_map_padding{2};
-
-  // Submap Parameters
   int submap_window_size{5};
 
-  // Ground Observation Parameters
+  // Localization Parameters
+  bool localization_mode{false};
+  double localization_minimum_score{0.5};
+
+  // Debugging Parameters
+  bool debug_visualize_covariances{false};
+  bool debug_timings{false};
   bool ground_debug_enable{false};
-  std::string ground_debug_cloud_topic{"glidar_slam/debug/ground_inliers"};
-  std::string ground_debug_marker_topic{"glidar_slam/debug/ground_plane"};
-  std::string ground_debug_image_topic{"glidar_slam/debug/ground_overlay"};
-  double ground_debug_plane_size{4.0};
+  bool ground_matching_debug_enable{false};
+  bool loop_debug_enable{false};
+  bool csm_debug_enable{false};
+
+  // LiDAR Preprocessing Parameters
+  bool scan_voxelization_enable{true};
+  double scan_voxelization_size{0.2};
+  bool scan_densification_enable{true};
+
+  // Mapping Parameters
+  double mapping_occupancy_resolution{0.05};
+  double mapping_ground_resolution{0.02};
+  bool mapping_ground_enable_texture_mapping{true};
+  bool mapping_ground_enable_ground_marking_mapping{false};
+  int mapping_threshold{200};
+  double mapping_log_odds_hit{0.8};
+  double mapping_log_odds_miss{0.35};
+  double mapping_log_odds_cap{15.0};
+
+  // Ground Factor
   bool ground_optimization_enable{true};
-  double ground_observation_max_age_sec{0.1};
-  int ground_minimum_inlier_count{100};
   double ground_normal_sigma{0.05};
   double ground_distance_sigma{0.03};
-  double ground_fallback_variance{1.0};
+
+  // Ground Extraction Parameters
   std::vector<float> ground_roi_ratios{0.0F, 0.0F, 0.2F, 0.4F};
   int ground_extraction_pixel_stride{2};
   double ground_extraction_voxel_size{0.05};
   double ground_extraction_max_distance{5.0};
   double ground_extraction_distance_threshold{0.05};
-  bool ground_mapping_enable_texture_mapping{true};
-  bool ground_mapping_enable_ground_marking_mapping{false};
-  std::string ground_marking_map_topic{"ground_markings_map"};
-  std::string ground_texture_map_topic{"ground_texture_map"};
-  std::string ground_texture_coverage_topic{"ground_texture_coverage"};
-  double ground_map_resolution{0.02};
-  int ground_map_padding{2};
-  int ground_marking_white_threshold{200};
-  double ground_marking_log_odds_hit{0.8};
-  double ground_marking_log_odds_miss{0.35};
-  double ground_marking_log_odds_cap{15.0};
+  int ground_extraction_adaptive_threshold_block_size{101};
+  double ground_extraction_adaptive_threshold_C{-65.0};
+
+  // Ground Matching Parameters
   bool ground_matching_enable{false};
-  int ground_matching_minimum_marking_count{20};
   double ground_matching_minimum_score{0.5};
-  double ground_matching_min_forward_distance{0.0};
-  double ground_matching_max_forward_distance{2.0};
-  bool ground_matching_debug_enable{false};
-  std::string ground_matching_debug_topic{"glidar_slam/debug/ground_matching"};
+  double ground_matching_max_distance{2.0};
+
+  // Loop Closure Parameters
+  uint64_t loop_minimum_key_separation{20};
+  double loop_maximum_yaw_difference{1.0};
+  double loop_mahalanobis_threshold{3.0};
+  double loop_minimum_score{0.5};
 
   // Correlative Scan Matcher Parameters
   double csm_smear_deviation{0.1};
@@ -94,18 +104,6 @@ struct Parameters
   bool csm_use_distance_transform{false};
   bool csm_use_tbb{false};
   std::vector<CsmSearchStage> csm_search_stages;
-  bool csm_debug_enable{false};
-
-  // Loop Closure Parameters
-  bool loop_debug_enable{false};
-  std::size_t loop_input_queue_capacity{2};
-  std::size_t loop_output_queue_capacity{8};
-  uint64_t loop_minimum_key_separation{20};
-  double loop_maximum_yaw_difference{1.0};
-  double loop_mahalanobis_threshold{3.0};
-  double loop_minimum_score{0.5};
-  double localization_minimum_score{0.5};
-  bool debug_timings{false};
 
   // iSAM2 Parameters
   double isam_relinearizeThreshold{0.1};
@@ -123,11 +121,10 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  scan_topic: " << p.scan_topic << ",\n"
      << "  tf_topic: " << p.tf_topic << ",\n"
      << "  odom_topic: " << p.odom_topic << ",\n"
-     << "  csm_debug_low_topic: " << p.csm_debug_low_topic << ",\n"
-     << "  csm_debug_high_topic: " << p.csm_debug_high_topic << ",\n"
      << "  color_image_topic: " << p.color_image_topic << ",\n"
      << "  aligned_depth_image_topic: " << p.aligned_depth_image_topic << ",\n"
      << "  color_camera_info_topic: " << p.color_camera_info_topic << ",\n"
+     << "  approx_sync_max_interval: " << p.approx_sync_max_interval << ",\n"
      << "  odom_covariance_diagonal: [";
 
   for (std::size_t i = 0; i < p.odom_covariance_diagonal.size(); ++i) {
@@ -138,25 +135,34 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  minimum_travel_distance: " << p.minimum_travel_distance << ",\n"
      << "  minimum_travel_heading: " << p.minimum_travel_heading << ",\n"
      << "  unobservable_variance: " << p.unobservable_variance << ",\n"
+     << "  submap_window_size: " << p.submap_window_size << ",\n"
+     << "  localization_mode: " << (p.localization_mode ? "true" : "false") << ",\n"
+     << "  localization_minimum_score: " << p.localization_minimum_score << ",\n"
      << "  debug_visualize_covariances: " << (p.debug_visualize_covariances ? "true" : "false")
      << ",\n"
-     << "  lidar_voxelization_enable: " << (p.lidar_voxelization_enable ? "true" : "false") << ",\n"
-     << "  lidar_voxelization_size: " << p.lidar_voxelization_size << ",\n"
-     << "  occ_map_resolution: " << p.occ_map_resolution << ",\n"
-     << "  occ_map_padding: " << p.occ_map_padding << ",\n"
-     << "  submap_window_size: " << p.submap_window_size << ",\n"
+     << "  debug_timings: " << (p.debug_timings ? "true" : "false") << ",\n"
      << "  ground_debug_enable: " << (p.ground_debug_enable ? "true" : "false") << ",\n"
-     << "  ground_debug_cloud_topic: " << p.ground_debug_cloud_topic << ",\n"
-     << "  ground_debug_marker_topic: " << p.ground_debug_marker_topic << ",\n"
-     << "  ground_debug_image_topic: " << p.ground_debug_image_topic << ",\n"
-     << "  ground_debug_plane_size: " << p.ground_debug_plane_size << ",\n"
+     << "  ground_matching_debug_enable: " << (p.ground_matching_debug_enable ? "true" : "false")
+     << ",\n"
+     << "  loop_debug_enable: " << (p.loop_debug_enable ? "true" : "false") << ",\n"
+     << "  csm_debug_enable: " << (p.csm_debug_enable ? "true" : "false") << ",\n"
+     << "  scan_voxelization_enable: " << (p.scan_voxelization_enable ? "true" : "false") << ",\n"
+     << "  scan_voxelization_size: " << p.scan_voxelization_size << ",\n"
+     << "  scan_densification_enable: " << (p.scan_densification_enable ? "true" : "false") << ",\n"
+     << "  mapping_occupancy_resolution: " << p.mapping_occupancy_resolution << ",\n"
+     << "  mapping_ground_resolution: " << p.mapping_ground_resolution << ",\n"
+     << "  mapping_ground_enable_texture_mapping: "
+     << (p.mapping_ground_enable_texture_mapping ? "true" : "false") << ",\n"
+     << "  mapping_ground_enable_ground_marking_mapping: "
+     << (p.mapping_ground_enable_ground_marking_mapping ? "true" : "false") << ",\n"
+     << "  mapping_threshold: " << p.mapping_threshold << ",\n"
+     << "  mapping_log_odds_hit: " << p.mapping_log_odds_hit << ",\n"
+     << "  mapping_log_odds_miss: " << p.mapping_log_odds_miss << ",\n"
+     << "  mapping_log_odds_cap: " << p.mapping_log_odds_cap << ",\n"
      << "  ground_optimization_enable: " << (p.ground_optimization_enable ? "true" : "false")
      << ",\n"
-     << "  ground_observation_max_age_sec: " << p.ground_observation_max_age_sec << ",\n"
-     << "  ground_minimum_inlier_count: " << p.ground_minimum_inlier_count << ",\n"
      << "  ground_normal_sigma: " << p.ground_normal_sigma << ",\n"
      << "  ground_distance_sigma: " << p.ground_distance_sigma << ",\n"
-     << "  ground_fallback_variance: " << p.ground_fallback_variance << ",\n"
      << "  ground_roi_ratios: [";
 
   for (std::size_t i = 0; i < p.ground_roi_ratios.size(); ++i) {
@@ -165,41 +171,38 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
 
   os << "],\n"
      << "  ground_extraction_pixel_stride: " << p.ground_extraction_pixel_stride << ",\n"
-     << "  ground_extraction_voxel_size: " << p.ground_extraction_voxel_size
-     << ",\n"
-     //  << "  ground_extraction_min_depth: " << p.ground_extraction_min_depth << ",\n"
+     << "  ground_extraction_voxel_size: " << p.ground_extraction_voxel_size << ",\n"
      << "  ground_extraction_max_distance: " << p.ground_extraction_max_distance << ",\n"
      << "  ground_extraction_distance_threshold: " << p.ground_extraction_distance_threshold
      << ",\n"
-     << "  ground_mapping_enable_texture_mapping: "
-     << (p.ground_mapping_enable_texture_mapping ? "true" : "false") << ",\n"
-     << "  ground_mapping_enable_ground_marking_mapping: "
-     << (p.ground_mapping_enable_ground_marking_mapping ? "true" : "false") << ",\n"
-     << "  ground_marking_map_topic: " << p.ground_marking_map_topic << ",\n"
-     << "  ground_texture_map_topic: " << p.ground_texture_map_topic << ",\n"
-     << "  ground_texture_coverage_topic: " << p.ground_texture_coverage_topic << ",\n"
-     << "  ground_map_resolution: " << p.ground_map_resolution << ",\n"
-     << "  ground_map_padding: " << p.ground_map_padding << ",\n"
-     << "  ground_marking_white_threshold: " << p.ground_marking_white_threshold << ",\n"
-     << "  ground_marking_log_odds_hit: " << p.ground_marking_log_odds_hit << ",\n"
-     << "  ground_marking_log_odds_miss: " << p.ground_marking_log_odds_miss << ",\n"
-     << "  ground_marking_log_odds_cap: " << p.ground_marking_log_odds_cap << ",\n"
+     << "  ground_extraction_adaptive_threshold_block_size: "
+     << p.ground_extraction_adaptive_threshold_block_size << ",\n"
+     << "  ground_extraction_adaptive_threshold_C: " << p.ground_extraction_adaptive_threshold_C
+     << ",\n"
      << "  ground_matching_enable: " << (p.ground_matching_enable ? "true" : "false") << ",\n"
-     << "  ground_matching_minimum_marking_count: " << p.ground_matching_minimum_marking_count
-     << ",\n"
      << "  ground_matching_minimum_score: " << p.ground_matching_minimum_score << ",\n"
-     << "  ground_matching_debug_enable: " << (p.ground_matching_debug_enable ? "true" : "false")
-     << ",\n"
-     << "  ground_matching_debug_topic: " << p.ground_matching_debug_topic << ",\n"
-     << "  loop_debug_enable: " << (p.loop_debug_enable ? "true" : "false") << ",\n"
-     << "  loop_input_queue_capacity: " << p.loop_input_queue_capacity << ",\n"
-     << "  loop_output_queue_capacity: " << p.loop_output_queue_capacity << ",\n"
+     << "  ground_matching_max_distance: " << p.ground_matching_max_distance << ",\n"
      << "  loop_minimum_key_separation: " << p.loop_minimum_key_separation << ",\n"
      << "  loop_maximum_yaw_difference: " << p.loop_maximum_yaw_difference << ",\n"
      << "  loop_mahalanobis_threshold: " << p.loop_mahalanobis_threshold << ",\n"
      << "  loop_minimum_score: " << p.loop_minimum_score << ",\n"
-     << "  debug_timings: " << (p.debug_timings ? "true" : "false") << ",\n"
-     << "  localization_minimum_score: " << p.localization_minimum_score << ",\n"
+     << "  csm_smear_deviation: " << p.csm_smear_deviation << ",\n"
+     << "  csm_use_laplace_kernel: " << (p.csm_use_laplace_kernel ? "true" : "false") << ",\n"
+     << "  csm_use_distance_transform: " << (p.csm_use_distance_transform ? "true" : "false")
+     << ",\n"
+     << "  csm_use_tbb: " << (p.csm_use_tbb ? "true" : "false") << ",\n"
+     << "  csm_search_stages: [\n";
+
+  for (std::size_t i = 0; i < p.csm_search_stages.size(); ++i) {
+    const auto & s = p.csm_search_stages[i];
+    os << "    {field_resolution: " << s.field_resolution
+       << ", translation_step: " << s.translation_step << ", angular_step: " << s.angular_step
+       << ", window_x: " << s.window_x << ", window_y: " << s.window_y
+       << ", window_yaw: " << s.window_yaw << "}" << (i < p.csm_search_stages.size() - 1 ? "," : "")
+       << "\n";
+  }
+
+  os << "  ],\n"
      << "  isam_relinearizeThreshold: " << p.isam_relinearizeThreshold << ",\n"
      << "  isam_relinearizeSkip: " << p.isam_relinearizeSkip << "\n"
      << "}";

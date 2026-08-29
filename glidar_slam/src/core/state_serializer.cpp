@@ -107,20 +107,20 @@ void readMatrix(std::istream & stream, Eigen::Matrix<double, Rows, Columns> & ma
   }
 }
 
-void writePointCloudXYZ(std::ostream & stream, const PointCloudXYZ & cloud)
+void writePointCloudXYZ(std::ostream & stream, const PointCloudXYZConstPtr & cloud)
 {
-  write(stream, static_cast<std::uint64_t>(cloud.size()));
-  for (const auto & point : cloud) {
+  write(stream, static_cast<std::uint64_t>(cloud->size()));
+  for (const auto & point : *cloud) {
     write(stream, point.x);
     write(stream, point.y);
     write(stream, point.z);
   }
 }
 
-void writePointCloudRGBA(std::ostream & stream, const PointCloudXYZRGBA & cloud)
+void writePointCloudRGBA(std::ostream & stream, const PointCloudXYZRGBAConstPtr & cloud)
 {
-  write(stream, static_cast<std::uint64_t>(cloud.size()));
-  for (const auto & point : cloud) {
+  write(stream, static_cast<std::uint64_t>(cloud->size()));
+  for (const auto & point : *cloud) {
     write(stream, point.x);
     write(stream, point.y);
     write(stream, point.z);
@@ -141,12 +141,12 @@ std::uint64_t readCount(std::istream & stream, const char * what)
   return count;
 }
 
-PointCloudXYZ readPointCloudXYZ(std::istream & stream)
+PointCloudXYZPtr readPointCloudXYZ(std::istream & stream)
 {
-  PointCloudXYZ cloud;
+  PointCloudXYZPtr cloud = std::make_shared<PointCloudXYZ>();
   const auto count = readCount(stream, "point cloud");
-  cloud.resize(static_cast<std::size_t>(count));
-  for (auto & point : cloud) {
+  cloud->resize(static_cast<std::size_t>(count));
+  for (auto & point : *cloud) {
     read(stream, point.x);
     read(stream, point.y);
     read(stream, point.z);
@@ -154,12 +154,12 @@ PointCloudXYZ readPointCloudXYZ(std::istream & stream)
   return cloud;
 }
 
-PointCloudXYZRGBA readPointCloudRGBA(std::istream & stream)
+PointCloudXYZRGBAPtr readPointCloudRGBA(std::istream & stream)
 {
-  PointCloudXYZRGBA cloud;
+  PointCloudXYZRGBAPtr cloud = std::make_shared<PointCloudXYZRGBA>();
   const auto count = readCount(stream, "colored point cloud");
-  cloud.resize(static_cast<std::size_t>(count));
-  for (auto & point : cloud) {
+  cloud->resize(static_cast<std::size_t>(count));
+  for (auto & point : *cloud) {
     read(stream, point.x);
     read(stream, point.y);
     read(stream, point.z);
@@ -226,7 +226,7 @@ void writeGroundObservation(std::ostream & stream, const GroundPlaneObservation 
   write(stream, static_cast<std::uint64_t>(observation.point_count));
   write(stream, static_cast<std::uint64_t>(observation.inlier_count));
   writePointCloudRGBA(stream, observation.ground_cloud);
-  writePointCloudXYZ(stream, observation.pcl);
+  writePointCloudXYZ(stream, observation.ground_cloud_sparse);
 }
 
 GroundPlaneObservation readGroundObservation(std::istream & stream)
@@ -241,7 +241,7 @@ GroundPlaneObservation readGroundObservation(std::istream & stream)
   observation.point_count = static_cast<std::size_t>(point_count);
   observation.inlier_count = static_cast<std::size_t>(inlier_count);
   observation.ground_cloud = readPointCloudRGBA(stream);
-  observation.pcl = readPointCloudXYZ(stream);
+  observation.ground_cloud_sparse = readPointCloudXYZ(stream);
   return observation;
 }
 
