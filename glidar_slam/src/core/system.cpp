@@ -77,13 +77,6 @@ gtsam::Pose3 makePlanarPose(const gtsam::Pose3 & pose)
   return utils::makePlanarPose(translation.x(), translation.y(), yaw);
 }
 
-gtsam::Matrix66 unobservablePoseCovariance(const Parameters & parameters)
-{
-  gtsam::Matrix66 covariance = gtsam::Matrix66::Zero();
-  covariance.diagonal().setConstant(parameters.unobservable_variance);
-  return covariance;
-}
-
 gtsam::Matrix66 csmCovarianceToPoseCovariance(
   const Eigen::Matrix3d & covariance, double unobservable_variance)
 {
@@ -167,7 +160,6 @@ SlamSystem::SlamSystem(
   std::unique_ptr<ScanMatcher> ground_scan_matcher, std::unique_ptr<ScanMatcher> loop_scan_matcher)
 : parameters_(parameters), scan_matcher_(std::move(scan_matcher))
 {
-  latest_pose_.covariance = unobservablePoseCovariance(*parameters_);
   map_database_ = std::make_shared<MapDatabase>();
   graph_optimizer_ = std::make_unique<GraphOptimizer>(parameters_);
   ground_marking_matcher_ =
@@ -179,7 +171,7 @@ SlamSystem::SlamSystem(
   loop_closure_detector_ =
     std::make_unique<LoopClosureDetector>(parameters_, map_database_, std::move(loop_scan_matcher));
   loop_closure_detector_->start();
-  map_builder_ = std::make_unique<MapBuilder>(parameters_);
+  map_builder_ = std::make_unique<mapping::MapBuilder>(parameters_);
   map_builder_->start();
 
   const bool localization_startup = parameters_->mode == Parameters::Mode::Localization;
@@ -432,15 +424,13 @@ bool SlamSystem::process(
       next_key, timestamp, root_pose, latest_odom_pose, laser_scan, prior_sigmas,
       ground_observation);
 
-    auto local_map = MapBuilder::buildLocalOccupancy(
-      laser_scan->points(), parameters_->mapping_occupancy_resolution);
+    new_keyframe->local_occupancy = std::make_shared<const mapping::LocalOccupancyMap>(
+      mapping::buildOccupancy(laser_scan->points(), *parameters_));
 
     if (ground_observation) {
-      MapBuilder::addLocalGroundMap(local_map, ground_observation->ground_cloud, *parameters_);
+      new_keyframe->local_ground = std::make_shared<const mapping::LocalGroundMap>(
+        mapping::buildGround(ground_observation->ground_cloud, *parameters_));
     }
-
-    new_keyframe->local_map =
-      std::make_shared<const global_map::LocalMapData>(std::move(local_map));
 
     // 3. Pure Vertex Insertion (No edges! It is a new trajectory branch)
     map_database_->addKeyFrame(new_keyframe);
@@ -450,7 +440,7 @@ bool SlamSystem::process(
     {
       std::lock_guard<std::mutex> lock(latest_output_mutex_);
       latest_pose_.pose = root_pose;
-      latest_pose_.covariance = unobservablePoseCovariance(*parameters_);
+      latest_pose_.covariance = unobservablePoseCovariance();
     }
     {
       std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
@@ -543,6 +533,7 @@ bool SlamSystem::process(
     latest_high_res_debug_ = csm_result.high_res_debug;
     latest_ground_observation_ = ground_observation;
     latest_ground_matching_debug_.reset();
+    latest_ground_extraction_debug_.reset();
   }
 
   // Map the 3x3 CSM Covariance (x, y, yaw) to a 6x6 GTSAM Covariance Matrix
@@ -613,12 +604,7 @@ bool SlamSystem::process(
 
   const auto map_start = std::chrono::steady_clock::now();
 
-  auto local_map = MapBuilder::buildLocalOccupancy(
-    laser_scan->points(), parameters_->mapping_occupancy_resolution);
-  if (ground_observation) {
-    MapBuilder::addLocalGroundMap(local_map, ground_observation->ground_cloud, *parameters_);
-  }
-  new_keyframe->local_map = std::make_shared<const global_map::LocalMapData>(std::move(local_map));
+  new_keyframe->buildLocalMaps(*parameters_);
 
   map_database_->addKeyFrame(new_keyframe);
   map_database_->addEdge(
@@ -726,7 +712,7 @@ PoseEstimate SlamSystem::getLatestPoseAndCovariance() const
   return latest_pose_;
 }
 
-std::shared_ptr<const GlobalMapSnapshot> SlamSystem::getLatestGlobalMap() const
+std::shared_ptr<const mapping::GlobalMapSnapshot> SlamSystem::getLatestGlobalMap() const
 {
   return map_builder_->getLatest();
 }
@@ -734,6 +720,8 @@ std::shared_ptr<const GlobalMapSnapshot> SlamSystem::getLatestGlobalMap() const
 bool SlamSystem::saveState(const std::filesystem::path & path, std::string * error) const
 {
   std::lock_guard<std::mutex> state_lock(state_mutex_);
+
+  SAM_INFO("Saving SLAM state snapshot to '{}'", path.string());
 
   SlamStateSnapshot snapshot;
 
@@ -764,7 +752,17 @@ bool SlamSystem::saveState(const std::filesystem::path & path, std::string * err
 
   snapshot.map_to_odom = getMapToOdom();
 
-  return StateSerializer::save(path, snapshot, error);
+  bool success = StateSerializer::save(path, snapshot, error);
+
+  if (success) {
+    SAM_INFO(
+      "SLAM state snapshot successfully saved ({} keyframes, {} factors, {} loop closures)",
+      snapshot.keyframes.size(), snapshot.factors.size(), snapshot.loop_closures.size());
+  } else {
+    SAM_ERROR("Failed to save SLAM state snapshot: {}", error ? *error : "unknown error");
+  }
+
+  return success;
 }
 
 bool SlamSystem::loadState(
@@ -772,6 +770,8 @@ bool SlamSystem::loadState(
   bool localization_only, std::string * error)
 {
   std::lock_guard<std::mutex> state_lock(state_mutex_);
+
+  SAM_INFO("Loading SLAM state snapshot from '{}'", path.string());
 
   SlamStateSnapshot snapshot;
   if (!StateSerializer::load(path, snapshot, error)) {
@@ -801,7 +801,7 @@ bool SlamSystem::loadState(
     map_database_->addEdge(from_key, to_key, MapDatabase::EdgeType::LoopClosure);
   }
 
-  map_builder_ = std::make_unique<MapBuilder>(parameters_);
+  map_builder_ = std::make_unique<mapping::MapBuilder>(parameters_);
   map_builder_->start();
   map_builder_->rebuild(map_database_->getAllKeyFrames());
 
@@ -815,11 +815,12 @@ bool SlamSystem::loadState(
   {
     std::lock_guard<std::mutex> lock(latest_output_mutex_);
     latest_pose_.pose = starting_pose;
-    latest_pose_.covariance = unobservablePoseCovariance(*parameters_);
+    latest_pose_.covariance = unobservablePoseCovariance();
     latest_low_res_debug_.reset();
     latest_high_res_debug_.reset();
     latest_ground_observation_.reset();
     latest_ground_matching_debug_.reset();
+    latest_ground_extraction_debug_.reset();
   }
 
   {
@@ -835,17 +836,14 @@ bool SlamSystem::loadState(
 
   if (localization_mode_) {
     tracking_reset_pending_ = false;
-    // resuming_saved_session_ = false;
     SAM_INFO("Map loaded successfully in LOCALIZATION ONLY mode.");
   } else if (use_saved_pose) {
     // 1. Clean continuous resume: Link directly to the last keyframe
-    // resuming_saved_session_ = true;
     tracking_reset_pending_ = false;
     loop_closure_detector_->start();
     SAM_INFO("Map loaded successfully. Resuming continuous SLAM session.");
   } else {
     // 2. Teleport / Relocalization: Needs proximity match
-    // resuming_saved_session_ = false;
     tracking_reset_pending_ = true;
     tracking_reset_pose_ = starting_pose;
     loop_closure_detector_->start();
@@ -883,7 +881,7 @@ bool SlamSystem::setLocalizationMode(
     {
       std::lock_guard<std::mutex> lock(latest_output_mutex_);
       latest_pose_.pose = use_current_pose ? latest_pose_.pose : initial_map_pose;
-      latest_pose_.covariance = unobservablePoseCovariance(*parameters_);
+      latest_pose_.covariance = unobservablePoseCovariance();
     }
 
     localization_initialized_ = false;
@@ -914,6 +912,13 @@ bool SlamSystem::setLocalizationMode(
   loop_closure_detector_->start();
 
   return true;
+}
+
+void SlamSystem::rebuildGlobalMap() const
+{
+  SAM_INFO("Rebuilding global map requested...");
+  map_database_->rebuildLocalMaps(*parameters_);
+  map_builder_->rebuild(map_database_->getAllKeyFrames());
 }
 
 std::size_t SlamSystem::getFactorCount() const
@@ -1011,10 +1016,12 @@ void SlamSystem::rebuildSubmap()
   auto rebuild_duration =
     std::chrono::duration<double, std::milli>(end_time - getkeyframes_time).count();
 
-  SAM_INFO(
-    "Rebuilt submap in {} ms (fieldResolutions: {} ms, getKeyFrames: {} ms, rebuild: {} ms)",
-    field_resolution_duration + get_keyframes_duration + rebuild_duration,
-    field_resolution_duration, get_keyframes_duration, rebuild_duration);
+  if (parameters_->debug_timings) {
+    SAM_INFO(
+      "Rebuilt submap in {} ms (fieldResolutions: {} ms, getKeyFrames: {} ms, rebuild: {} ms)",
+      field_resolution_duration + get_keyframes_duration + rebuild_duration,
+      field_resolution_duration, get_keyframes_duration, rebuild_duration);
+  }
 
   submap_grid_ = std::move(rebuilt_submap);
 }
@@ -1023,6 +1030,13 @@ void SlamSystem::dispatchFindLoopClosure(const KeyFrame & latest_keyframe)
 {
   KeyFrame snapshot(latest_keyframe);
   loop_closure_detector_->submit(std::move(snapshot));
+}
+
+gtsam::Matrix66 SlamSystem::unobservablePoseCovariance()
+{
+  gtsam::Matrix66 covariance = gtsam::Matrix66::Zero();
+  covariance.diagonal().setConstant(parameters_->unobservable_variance);
+  return covariance;
 }
 
 void SlamSystem::handleGroundConstraint(

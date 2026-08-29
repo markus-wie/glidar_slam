@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "glidar_slam/core/key_frame.hpp"
+#include "glidar_slam/core/parameters.hpp"
 #include "glidar_slam/core/state_snapshot.hpp"
 
 namespace glidar_slam::core {
@@ -70,6 +71,8 @@ public:
   bool restore(const std::vector<KeyFrame> & keyframes, uint64_t next_key);
 
   void rebuildSpatialIndex();
+
+  void rebuildLocalMaps(const Parameters & parameters);
 
 private:
   struct Edge

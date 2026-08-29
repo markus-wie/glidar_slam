@@ -10,6 +10,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
+#include "glidar_slam/core/mapping/global_map.hpp"
 #include "glidar_slam/core/parameters.hpp"
 #include "glidar_slam/core/system.hpp"
 #include "glidar_slam/ros2/scan_matcher_interface.hpp"
@@ -79,10 +80,10 @@ private:
   void publishPoseEstimate(const rclcpp::Time & stamp);
   void publishMapsTimerCallback();
   void publishOccupancyGrid(
-    const std::shared_ptr<const glidar_slam::core::GlobalMapSnapshot> & snapshot,
+    const std::shared_ptr<const glidar_slam::core::mapping::GlobalMapSnapshot> & snapshot,
     const rclcpp::Time & stamp);
   void publishGroundMap(
-    const std::shared_ptr<const glidar_slam::core::GlobalMapSnapshot> & snapshot,
+    const std::shared_ptr<const glidar_slam::core::mapping::GlobalMapSnapshot> & snapshot,
     const rclcpp::Time & stamp);
   void publishGroundDebug(
     const glidar_slam::core::GroundPlaneObservation & observation,

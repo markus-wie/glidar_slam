@@ -318,7 +318,7 @@ void Ros2SlamWrapper::saveMapsCallback(
   }
 
   try {
-    const auto & occupancy_info = snapshot->occupancy.getInfo();
+    const auto & occupancy_info = snapshot->occupancy->getInfo();
     if (request->save_occupancy) {
       const std::string pgm_path = request->base_filepath + ".pgm";
       const std::string yaml_path = request->base_filepath + ".yaml";
@@ -327,7 +327,7 @@ void Ros2SlamWrapper::saveMapsCallback(
         throw std::runtime_error("Cannot open " + pgm_path);
       }
       pgm << "P5\n" << occupancy_info.width << " " << occupancy_info.height << "\n255\n";
-      const auto & data = snapshot->occupancy.getData();
+      const auto & data = snapshot->occupancy->getData();
       for (std::size_t y = 0; y < occupancy_info.height; ++y) {
         for (std::size_t x = 0; x < occupancy_info.width; ++x) {
           const std::size_t map_y = occupancy_info.height - 1 - y;
@@ -354,14 +354,14 @@ void Ros2SlamWrapper::saveMapsCallback(
     }
 
     if (request->save_texture) {
-      const auto & info = snapshot->texture.getInfo();
-      const auto & rgb = snapshot->texture.getRgbData();
+      const auto & info = snapshot->texture->getInfo();
+      const auto & rgb = snapshot->texture->getRgbData();
       if (rgb.size() != static_cast<std::size_t>(info.width) * info.height * 3U) {
         throw std::runtime_error("Texture map data size does not match its metadata");
       }
       cv::Mat image(info.height, info.width, CV_8UC4);
-      for (int r = 0; r < info.height; ++r) {
-        for (int c = 0; c < info.width; ++c) {
+      for (uint32_t r = 0; r < info.height; ++r) {
+        for (uint32_t c = 0; c < info.width; ++c) {
           const std::size_t map_y = info.height - 1 - r;
           const std::size_t map_x = info.width - 1 - c;
           const std::size_t index = map_y * info.width + map_x;
@@ -481,6 +481,8 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
   rcl_interfaces::msg::SetParametersResult result;
   result.successful = true;
 
+  bool rebuild_global_map = false;
+
   Parameters updated = *parameters_;
   for (const auto & parameter : parameters) {
     const std::string & name = parameter.get_name();
@@ -499,12 +501,12 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.unobservable_variance = parameter.as_double();
     } else if (name == "debug_visualize_covariances") {
       updated.debug_visualize_covariances = parameter.as_bool();
-    } else if (name == "scan_voxelization_enable") {
+    } else if (name == "scan.voxelization_enable") {
       updated.scan_voxelization_enable = parameter.as_bool();
-    } else if (name == "scan_voxelization_size") {
+    } else if (name == "scan.voxelization_size") {
       updated.scan_voxelization_size = parameter.as_double();
-    } else if (name == "mapping.scan_map_resolution") {
-      updated.mapping_occupancy_resolution = parameter.as_double();
+    } else if (name == "scan.densification_enable") {
+      updated.scan_densification_enable = parameter.as_bool();
     } else if (name == "submap_window_size") {
       updated.submap_window_size = static_cast<int>(parameter.as_int());
     } else if (name == "ground_debug_enable") {
@@ -534,20 +536,30 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
         static_cast<int>(parameter.as_int());
     } else if (name == "ground_extraction_adaptive_threshold_C") {
       updated.ground_extraction_adaptive_threshold_C = parameter.as_double();
-    } else if (name == "mapping_ground_enable_texture_mapping") {
+    } else if (name == "mapping.occupancy.resolution") {
+      updated.mapping_occupancy_resolution = parameter.as_double();
+      rebuild_global_map = true;
+    } else if (name == "mapping.ground.enable_texture_mapping") {
       updated.mapping_ground_enable_texture_mapping = parameter.as_bool();
-    } else if (name == "mapping_ground_enable_ground_marking_mapping") {
+      rebuild_global_map = true;
+    } else if (name == "mapping.ground.enable_ground_marking_mapping") {
       updated.mapping_ground_enable_ground_marking_mapping = parameter.as_bool();
-    } else if (name == "mapping.ground_map_resolution") {
+      rebuild_global_map = true;
+    } else if (name == "mapping.ground.resolution") {
       updated.mapping_ground_resolution = parameter.as_double();
-    } else if (name == "mapping_threshold") {
+      rebuild_global_map = true;
+    } else if (name == "mapping.threshold") {
       updated.mapping_threshold = static_cast<int>(parameter.as_int());
-    } else if (name == "mapping_log_odds_hit") {
+      rebuild_global_map = true;
+    } else if (name == "mapping.log_odds_hit") {
       updated.mapping_log_odds_hit = parameter.as_double();
-    } else if (name == "mapping_log_odds_miss") {
+      rebuild_global_map = true;
+    } else if (name == "mapping.log_odds_miss") {
       updated.mapping_log_odds_miss = parameter.as_double();
-    } else if (name == "mapping_log_odds_cap") {
+      rebuild_global_map = true;
+    } else if (name == "mapping.log_odds_cap") {
       updated.mapping_log_odds_cap = parameter.as_double();
+      rebuild_global_map = true;
     } else if (name == "ground_matching_enable") {
       updated.ground_matching_enable = parameter.as_bool();
     } else if (name == "ground_matching_minimum_score") {
@@ -571,6 +583,10 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
     } else if (name == "debug_timings") {
       updated.debug_timings = parameter.as_bool();
     }
+  }
+
+  if (rebuild_global_map) {
+    slam_system_->rebuildGlobalMap();
   }
 
   if (
@@ -1091,14 +1107,14 @@ void Ros2SlamWrapper::publishGraph(
 }
 
 void Ros2SlamWrapper::publishOccupancyGrid(
-  const std::shared_ptr<const glidar_slam::core::GlobalMapSnapshot> & map_snapshot,
+  const std::shared_ptr<const glidar_slam::core::mapping::GlobalMapSnapshot> & map_snapshot,
   const rclcpp::Time & stamp)
 {
-  if (!map_snapshot) {
+  if (!map_snapshot || !map_snapshot->occupancy) {
     return;
   }
   occupancy_grid_publisher_->publish(
-    Utils::toRosMessage(map_snapshot->occupancy, parameters_->map_frame, stamp));
+    Utils::toRosMessage(*map_snapshot->occupancy, parameters_->map_frame, stamp));
 }
 
 void Ros2SlamWrapper::publishMapsTimerCallback()
@@ -1110,21 +1126,21 @@ void Ros2SlamWrapper::publishMapsTimerCallback()
 }
 
 void Ros2SlamWrapper::publishGroundMap(
-  const std::shared_ptr<const glidar_slam::core::GlobalMapSnapshot> & map_snapshot,
+  const std::shared_ptr<const glidar_slam::core::mapping::GlobalMapSnapshot> & map_snapshot,
   const rclcpp::Time & stamp)
 {
   if (!map_snapshot) {
     return;
   }
 
-  if (parameters_->mapping_ground_enable_texture_mapping) {
+  if (parameters_->mapping_ground_enable_texture_mapping && map_snapshot->texture) {
     ground_texture_image_publisher_->publish(
-      Utils::toRosImage(map_snapshot->texture, parameters_->map_frame, stamp));
+      Utils::toRosImage(*map_snapshot->texture, parameters_->map_frame, stamp));
   }
 
-  if (parameters_->mapping_ground_enable_ground_marking_mapping) {
+  if (parameters_->mapping_ground_enable_ground_marking_mapping && map_snapshot->marking) {
     ground_marking_grid_publisher_->publish(
-      Utils::toRosMessage(map_snapshot->marking, parameters_->map_frame, stamp));
+      Utils::toRosMessage(*map_snapshot->marking, parameters_->map_frame, stamp));
   }
 }
 

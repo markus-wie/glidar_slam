@@ -171,18 +171,36 @@ PointCloudXYZRGBAPtr readPointCloudRGBA(std::istream & stream)
   return cloud;
 }
 
-void writeLocalMap(std::ostream & stream, const global_map::LocalMapData & map)
+void writeLocalOccupancyMap(std::ostream & stream, const mapping::LocalOccupancyMap & map)
 {
   write(stream, map.resolution);
   write(stream, static_cast<std::uint64_t>(map.cells.size()));
   for (const auto & cell : map.cells) {
     write(stream, cell.x);
     write(stream, cell.y);
-    write(stream, cell.evidence);
+    write(stream, cell.log_odds);
   }
-  write(stream, map.ground_resolution);
-  write(stream, static_cast<std::uint64_t>(map.ground_cells.size()));
-  for (const auto & cell : map.ground_cells) {
+}
+
+mapping::LocalOccupancyMap readLocalOccupancyMap(std::istream & stream)
+{
+  mapping::LocalOccupancyMap map;
+  read(stream, map.resolution);
+  const auto cell_count = readCount(stream, "local occupancy map cell count");
+  map.cells.resize(static_cast<std::size_t>(cell_count));
+  for (auto & cell : map.cells) {
+    read(stream, cell.x);
+    read(stream, cell.y);
+    read(stream, cell.log_odds);
+  }
+  return map;
+}
+
+void writeLocalGroundMap(std::ostream & stream, const mapping::LocalGroundMap & map)
+{
+  write(stream, map.resolution);
+  write(stream, static_cast<std::uint64_t>(map.cells.size()));
+  for (const auto & cell : map.cells) {
     write(stream, cell.x);
     write(stream, cell.y);
     write(stream, cell.log_odds);
@@ -192,21 +210,13 @@ void writeLocalMap(std::ostream & stream, const global_map::LocalMapData & map)
   }
 }
 
-global_map::LocalMapData readLocalMap(std::istream & stream)
+mapping::LocalGroundMap readLocalGroundMap(std::istream & stream)
 {
-  global_map::LocalMapData map;
+  mapping::LocalGroundMap map;
   read(stream, map.resolution);
-  const auto cell_count = readCount(stream, "local map cell count");
+  const auto cell_count = readCount(stream, "local ground map cell count");
   map.cells.resize(static_cast<std::size_t>(cell_count));
   for (auto & cell : map.cells) {
-    read(stream, cell.x);
-    read(stream, cell.y);
-    read(stream, cell.evidence);
-  }
-  read(stream, map.ground_resolution);
-  const auto ground_cell_count = readCount(stream, "local ground map cell count");
-  map.ground_cells.resize(static_cast<std::size_t>(ground_cell_count));
-  for (auto & cell : map.ground_cells) {
     read(stream, cell.x);
     read(stream, cell.y);
     read(stream, cell.log_odds);
@@ -273,6 +283,7 @@ bool StateSerializer::save(
     writePose(stream, snapshot.latest_pose);
     writePose(stream, snapshot.map_to_odom);
     write(stream, static_cast<std::uint64_t>(snapshot.keyframes.size()));
+
     for (const auto & keyframe : snapshot.keyframes) {
       write(stream, keyframe.revision);
       write(stream, keyframe.key);
@@ -292,8 +303,18 @@ bool StateSerializer::save(
       if (keyframe.ground_observation) {
         writeGroundObservation(stream, *keyframe.ground_observation);
       }
-      writeLocalMap(stream, *keyframe.local_map);
+
+      write(stream, keyframe.local_occupancy != nullptr);
+      if (keyframe.local_occupancy) {
+        writeLocalOccupancyMap(stream, *keyframe.local_occupancy);
+      }
+
+      write(stream, keyframe.local_ground != nullptr);
+      if (keyframe.local_ground) {
+        writeLocalGroundMap(stream, *keyframe.local_ground);
+      }
     }
+
     write(stream, static_cast<std::uint64_t>(snapshot.factors.size()));
     for (const auto & factor : snapshot.factors) {
       write(stream, factor.type);
@@ -354,21 +375,27 @@ bool StateSerializer::load(
     loaded.map_to_odom = readPose(stream);
     const auto keyframe_count = readCount(stream, "keyframe count");
     loaded.keyframes.reserve(static_cast<std::size_t>(keyframe_count));
+
     for (std::uint64_t index = 0; index < keyframe_count; ++index) {
       KeyFrame keyframe;
       bool has_covariance = false;
       bool has_ground_observation = false;
+      bool has_local_occupancy = false;
+      bool has_local_ground = false;
+
       read(stream, keyframe.revision);
       read(stream, keyframe.key);
       read(stream, keyframe.timestamp);
       keyframe.pose = readPose(stream);
       keyframe.odom_pose = readPose(stream);
+
       read(stream, has_covariance);
       if (has_covariance) {
         gtsam::Matrix66 covariance;
         readMatrix(stream, covariance);
         keyframe.covariance = covariance;
       }
+
       const auto scan_count = readCount(stream, "scan point count");
       std::vector<Point2D> points(static_cast<std::size_t>(scan_count));
       for (auto & point : points) {
@@ -376,13 +403,27 @@ bool StateSerializer::load(
         read(stream, point.y);
       }
       keyframe.scan = std::make_shared<const LaserScan>(std::move(points));
+
       read(stream, has_ground_observation);
       if (has_ground_observation) {
         keyframe.ground_observation = readGroundObservation(stream);
       }
-      keyframe.local_map = std::make_shared<const global_map::LocalMapData>(readLocalMap(stream));
+
+      read(stream, has_local_occupancy);
+      if (has_local_occupancy) {
+        keyframe.local_occupancy =
+          std::make_shared<const mapping::LocalOccupancyMap>(readLocalOccupancyMap(stream));
+      }
+
+      read(stream, has_local_ground);
+      if (has_local_ground) {
+        keyframe.local_ground =
+          std::make_shared<const mapping::LocalGroundMap>(readLocalGroundMap(stream));
+      }
+
       loaded.keyframes.push_back(std::move(keyframe));
     }
+
     const auto factor_count = readCount(stream, "factor count");
     loaded.factors.resize(static_cast<std::size_t>(factor_count));
     for (auto & factor : loaded.factors) {
@@ -402,12 +443,14 @@ bool StateSerializer::load(
       read(stream, factor.normal_sigma);
       read(stream, factor.distance_sigma);
     }
+
     const auto closure_count = readCount(stream, "loop closure count");
     loaded.loop_closures.resize(static_cast<std::size_t>(closure_count));
     for (auto & closure : loaded.loop_closures) {
       read(stream, closure.first);
       read(stream, closure.second);
     }
+
     snapshot = std::move(loaded);
     return true;
   } catch (const std::exception & exception) {

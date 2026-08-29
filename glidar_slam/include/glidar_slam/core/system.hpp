@@ -15,8 +15,8 @@
 #include "glidar_slam/core/ground_plane_extractor.hpp"
 #include "glidar_slam/core/key_frame.hpp"
 #include "glidar_slam/core/loop_closure.hpp"
-#include "glidar_slam/core/map_builder.hpp"
 #include "glidar_slam/core/map_database.hpp"
+#include "glidar_slam/core/mapping/map_builder.hpp"
 #include "glidar_slam/core/parameters.hpp"
 #include "glidar_slam/core/scan_matcher.hpp"
 #include "glidar_slam/core/scan_matcher/correlative_scan_matcher.hpp"
@@ -54,7 +54,7 @@ public:
   std::vector<MapDatabase::GraphEdge> getEdges() const;
 
   gtsam::Pose3 getMapToOdom() const;
-  std::shared_ptr<const GlobalMapSnapshot> getLatestGlobalMap() const;
+  std::shared_ptr<const mapping::GlobalMapSnapshot> getLatestGlobalMap() const;
   std::size_t getFactorCount() const;
 
   bool saveState(const std::filesystem::path & path, std::string * error = nullptr) const;
@@ -66,6 +66,8 @@ public:
   bool setLocalizationMode(
     bool enable, const gtsam::Pose3 & initial_map_pose, bool use_current_pose,
     std::string * error = nullptr);
+
+  void rebuildGlobalMap() const;
 
 private:
   bool shouldCreateKeyFrame(const gtsam::Pose3 & current_odom_pose) const;
@@ -84,6 +86,8 @@ private:
 
   void dispatchFindLoopClosure(const KeyFrame & latest_keyframe);
 
+  gtsam::Matrix66 unobservablePoseCovariance();
+
   // central parameters for all subsystems
   std::shared_ptr<Parameters> parameters_;
 
@@ -95,7 +99,7 @@ private:
   std::unique_ptr<GroundMarkingMatcher> ground_marking_matcher_;
   std::unique_ptr<GraphOptimizer> graph_optimizer_;
   std::unique_ptr<LoopClosureDetector> loop_closure_detector_;
-  std::unique_ptr<MapBuilder> map_builder_;
+  std::unique_ptr<mapping::MapBuilder> map_builder_;
   std::unique_ptr<SubmapGrid> submap_grid_;
 
   gtsam::Pose3 latest_map_to_odom_;

@@ -476,7 +476,8 @@ bool MapDatabase::restore(const std::vector<KeyFrame> & keyframes, uint64_t next
     const auto & kf = keyframes[i];
     const uint64_t current_key = kf.key;
 
-    if (!kf.scan || !kf.local_map || restored_nodes.find(current_key) != restored_nodes.end()) {
+    if (
+      !kf.scan || !kf.local_occupancy || restored_nodes.find(current_key) != restored_nodes.end()) {
       return false;
     }
 
@@ -515,6 +516,18 @@ void MapDatabase::rebuildSpatialIndex()
     spatial_index_ = std::make_unique<SpatialIndex>();
   }
   spatial_index_->rebuild(nodes_);
+}
+
+void MapDatabase::rebuildLocalMaps(const Parameters & parameters)
+{
+  std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+
+  for (auto & [key, node] : nodes_) {
+    auto & keyframe = node.keyframe;
+    if (keyframe) {
+      keyframe->buildLocalMaps(parameters);
+    }
+  }
 }
 
 }  // namespace glidar_slam::core

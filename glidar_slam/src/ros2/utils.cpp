@@ -4,7 +4,7 @@ namespace glidar_slam::ros2 {
 namespace {
 
 void setOccupancyGridMetadata(
-  nav_msgs::msg::OccupancyGrid & msg, const glidar_slam::core::GlobalMap::Info & info,
+  nav_msgs::msg::OccupancyGrid & msg, const glidar_slam::core::mapping::GlobalMap::Info & info,
   const std::string & frame_id, const rclcpp::Time & stamp)
 {
   msg.header.stamp = stamp;
@@ -32,21 +32,21 @@ nav_msgs::msg::OccupancyGrid toRosMessage(
 }  // namespace
 
 nav_msgs::msg::OccupancyGrid Utils::toRosMessage(
-  const glidar_slam::core::global_map::OccupancyGrid & core_grid, const std::string & frame_id,
+  const glidar_slam::core::mapping::OccupancyGrid & core_grid, const std::string & frame_id,
   const rclcpp::Time & stamp)
 {
   return glidar_slam::ros2::toRosMessage(core_grid, frame_id, stamp);
 }
 
 nav_msgs::msg::OccupancyGrid Utils::toRosMessage(
-  const glidar_slam::core::global_map::GroundMarkingGrid & core_grid, const std::string & frame_id,
+  const glidar_slam::core::mapping::GroundMarkingGrid & core_grid, const std::string & frame_id,
   const rclcpp::Time & stamp)
 {
   return glidar_slam::ros2::toRosMessage(core_grid, frame_id, stamp);
 }
 
 sensor_msgs::msg::Image Utils::toRosImage(
-  const glidar_slam::core::global_map::GroundTextureGrid & core_grid, const std::string & frame_id,
+  const glidar_slam::core::mapping::GroundTextureGrid & core_grid, const std::string & frame_id,
   const rclcpp::Time & stamp)
 {
   sensor_msgs::msg::Image msg;

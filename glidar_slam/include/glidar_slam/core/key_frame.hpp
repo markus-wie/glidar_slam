@@ -5,9 +5,10 @@
 #include <optional>
 #include <utility>
 
-#include "glidar_slam/core/global_map/map_data.hpp"
 #include "glidar_slam/core/ground_plane_extractor.hpp"
 #include "glidar_slam/core/laser_scan.hpp"
+#include "glidar_slam/core/mapping/local_map.hpp"
+#include "glidar_slam/core/parameters.hpp"
 #include "glidar_slam/core/types.hpp"
 #include "gtsam/geometry/Pose3.h"
 
@@ -30,7 +31,8 @@ public:
     covariance(std::move(covariance)),
     scan(std::move(scan)),
     ground_observation(std::move(ground_observation)),
-    local_map(std::make_shared<const global_map::LocalMapData>())
+    local_occupancy(std::make_shared<const mapping::LocalOccupancyMap>()),
+    local_ground(std::make_shared<const mapping::LocalGroundMap>())
   {
   }
 
@@ -42,6 +44,8 @@ public:
   KeyFrame & operator=(const KeyFrame & ref) = default;
   KeyFrame & operator=(KeyFrame && ref) noexcept = default;
 
+  void buildLocalMaps(const Parameters & parameters);
+
   uint64_t key{0};
   uint64_t revision{0};
   double timestamp{0.0};
@@ -52,7 +56,10 @@ public:
 
   std::shared_ptr<const LaserScan> scan;
   std::optional<GroundPlaneObservation> ground_observation;
-  std::shared_ptr<const global_map::LocalMapData> local_map;
+
+  // Cached local maps for global map building
+  std::shared_ptr<const mapping::LocalOccupancyMap> local_occupancy;
+  std::shared_ptr<const mapping::LocalGroundMap> local_ground;
 };
 
 }  // namespace glidar_slam::core

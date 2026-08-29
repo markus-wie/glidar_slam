@@ -34,9 +34,9 @@ glidar_slam:
     # Startup Parameters
     startup:
       mode: "mapping" # "mapping" or "localization"
-      map_load_path: "/workspaces/ros2/glidar_slam_state3.bin"
+      map_load_path: "" #"/workspaces/ros2/glidar_slam_state.bin"
       initial_pose:
-        use_provided: false
+        use_provided: true
         pose: [0.0, 0.0, 0.0] # [x, y, yaw]
 
     # Localization Parameters
@@ -69,14 +69,14 @@ glidar_slam:
     # Occupancy Grid Parameters
     mapping:
       occupancy:
-        resolution: 0.05
+        resolution: 0.04
       ground:
         resolution: 0.02
         enable_texture_mapping: true
         enable_ground_marking_mapping: true
       threshold: 200
-      log_odds_hit: 0.8
-      log_odds_miss: 0.35
+      log_odds_hit: 0.9
+      log_odds_miss: 0.3
       log_odds_cap: 15.0
 
     #### GROUND FACTOR ####
