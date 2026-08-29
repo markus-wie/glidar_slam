@@ -12,6 +12,8 @@
 #include "glidar_slam/core/parameters.hpp"
 #include "glidar_slam/core/system.hpp"
 #include "glidar_slam/ros2/scan_matcher_interface.hpp"
+#include "glidar_slam_msgs/srv/load_slam_state.hpp"
+#include "glidar_slam_msgs/srv/save_slam_state.hpp"
 #include "gtsam/geometry/Pose3.h"
 #include "message_filters/subscriber.hpp"
 #include "message_filters/sync_policies/approximate_time.hpp"
@@ -45,11 +47,20 @@ public:
 
 private:
   void odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr & msg);
+
   void ScanRGBDCallback(
     const sensor_msgs::msg::LaserScan::ConstSharedPtr & scan_msg,
     const sensor_msgs::msg::Image::ConstSharedPtr & color_msg,
     const sensor_msgs::msg::Image::ConstSharedPtr & depth_msg,
     const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg);
+
+  void saveStateCallback(
+    std::shared_ptr<glidar_slam_msgs::srv::SaveSlamState::Request> request,
+    std::shared_ptr<glidar_slam_msgs::srv::SaveSlamState::Response> response);
+
+  void loadStateCallback(
+    std::shared_ptr<glidar_slam_msgs::srv::LoadSlamState::Request> request,
+    std::shared_ptr<glidar_slam_msgs::srv::LoadSlamState::Response> response);
 
   void publishGraph(
     const std::vector<std::shared_ptr<const KeyFrame>> & keyframes,
@@ -133,9 +144,12 @@ private:
   rclcpp::CallbackGroup::SharedPtr scan_callback_group_;
   rclcpp::CallbackGroup::SharedPtr camera_callback_group_;
   rclcpp::CallbackGroup::SharedPtr map_callback_group_;
+  rclcpp::CallbackGroup::SharedPtr state_callback_group_;
 
   // Subscribers
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_subscriber_;
+  rclcpp::Service<glidar_slam_msgs::srv::SaveSlamState>::SharedPtr save_state_service_;
+  rclcpp::Service<glidar_slam_msgs::srv::LoadSlamState>::SharedPtr load_state_service_;
 
   using GroundSyncPolicy = message_filters::sync_policies::ApproximateTime<
     sensor_msgs::msg::LaserScan, sensor_msgs::msg::Image, sensor_msgs::msg::Image,

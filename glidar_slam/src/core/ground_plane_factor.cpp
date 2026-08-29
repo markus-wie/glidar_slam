@@ -21,6 +21,13 @@ GroundPlaneFactor::GroundPlaneFactor(
                                                                           : gtsam::Vector3::UnitX();
   tangent_x_ = reference_normal_in_map_.cross(basis_axis).normalized();
   tangent_y_ = reference_normal_in_map_.cross(tangent_x_).normalized();
+
+  auto gaussian_model = std::dynamic_pointer_cast<gtsam::noiseModel::Gaussian>(model);
+  if (gaussian_model) {
+    gtsam::Vector sigmas = gaussian_model->sigmas();
+    normal_sigma_ = sigmas(0);
+    distance_sigma_ = sigmas(2);
+  }
 }
 
 gtsam::Vector GroundPlaneFactor::evaluateError(
@@ -48,6 +55,36 @@ gtsam::Vector GroundPlaneFactor::error(const gtsam::Pose3 & pose) const
   error << normal_err_2d.x(), normal_err_2d.y(), plane_offset - reference_plane_offset_;
 
   return error;
+}
+
+gtsam::Vector3 GroundPlaneFactor::getObservedNormalInBase() const
+{
+  return observed_normal_in_base_;
+}
+
+double GroundPlaneFactor::getObservedDistanceToBase() const
+{
+  return observed_distance_to_base_;
+}
+
+gtsam::Vector3 GroundPlaneFactor::getReferenceNormalInMap() const
+{
+  return reference_normal_in_map_;
+}
+
+double GroundPlaneFactor::getReferencePlaneOffset() const
+{
+  return reference_plane_offset_;
+}
+
+double GroundPlaneFactor::getNormalSigma() const
+{
+  return normal_sigma_;
+}
+
+double GroundPlaneFactor::getDistanceSigma() const
+{
+  return distance_sigma_;
 }
 
 }  // namespace glidar_slam::core

@@ -116,6 +116,46 @@ public:
     return result;
   }
 
+  std::optional<uint64_t> closest(const gtsam::Pose3 & query_pose) const
+  {
+    if (cloud_.points.empty() && pending_points_.empty()) {
+      return std::nullopt;
+    }
+
+    const gtsam::Point3 & translation = query_pose.translation();
+    const double query[2] = {translation.x(), translation.y()};
+
+    double min_dist_sqr = std::numeric_limits<double>::max();
+    std::optional<uint64_t> best_key = std::nullopt;
+
+    // 1. Search the main KD-tree (if it has points)
+    if (!cloud_.points.empty()) {
+      unsigned int ret_index = 0;
+      double out_dist_sqr = 0.0;
+
+      const size_t matches = tree_.knnSearch(query, 1, &ret_index, &out_dist_sqr);
+
+      if (matches > 0) {
+        min_dist_sqr = out_dist_sqr;
+        best_key = keyframe_indices_[ret_index];
+      }
+    }
+
+    // 2. Search pending points (a recently added point might be closer)
+    for (size_t index = 0; index < pending_points_.size(); ++index) {
+      const double dx = pending_points_[index][0] - query[0];
+      const double dy = pending_points_[index][1] - query[1];
+      const double dist_sqr = dx * dx + dy * dy;
+
+      if (dist_sqr < min_dist_sqr) {
+        min_dist_sqr = dist_sqr;
+        best_key = pending_indices_[index];
+      }
+    }
+
+    return best_key;
+  }
+
 private:
   PointCloud cloud_;
   std::vector<uint64_t> keyframe_indices_;
@@ -175,6 +215,9 @@ void MapDatabase::addKeyFrame(std::shared_ptr<KeyFrame> keyframe)
   nodes_.emplace(key, std::move(node));
   keyframe_order_.push_back(key);
 
+  // handle next keyframe key internally
+  incrementNextKey();
+
   // Spatial Index maintenance
   if (!spatial_index_) {
     spatial_index_ = std::make_unique<SpatialIndex>();
@@ -221,34 +264,6 @@ std::vector<std::shared_ptr<const KeyFrame>> MapDatabase::updatePoses(
   return changed;
 }
 
-std::shared_ptr<const KeyFrame> MapDatabase::getSnapshot(uint64_t key) const
-{
-  std::shared_lock<std::shared_mutex> lock(rw_mutex_);
-
-  const auto it = nodes_.find(key);
-  if (it != nodes_.end()) {
-    const Node & node = it->second;
-    return node.keyframe;
-  }
-
-  return {};
-}
-
-std::vector<std::shared_ptr<const KeyFrame>> MapDatabase::getSnapshots() const
-{
-  std::shared_lock<std::shared_mutex> lock(rw_mutex_);
-
-  std::vector<std::shared_ptr<const KeyFrame>> snapshots;
-  snapshots.reserve(keyframe_order_.size());
-
-  for (const uint64_t key : keyframe_order_) {
-    const Node & node = nodes_.at(key);
-    snapshots.push_back(node.keyframe);
-  }
-
-  return snapshots;
-}
-
 std::vector<std::shared_ptr<const KeyFrame>> MapDatabase::getNearbyKeyFrames(
   const gtsam::Pose3 & query_pose, double radius) const
 {
@@ -262,6 +277,22 @@ std::vector<std::shared_ptr<const KeyFrame>> MapDatabase::getNearbyKeyFrames(
     nearby_keyframes.push_back(nodes_.at(key).keyframe);
   }
   return nearby_keyframes;
+}
+
+std::shared_ptr<const KeyFrame> MapDatabase::getClosestKeyFrame(
+  const gtsam::Pose3 & query_pose) const
+{
+  std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+  if (!spatial_index_) {
+    return nullptr;
+  }
+  std::optional<uint64_t> closest_key = spatial_index_->closest(query_pose);
+
+  if (closest_key) {
+    return nodes_.at(*closest_key).keyframe;
+  }
+
+  return nullptr;
 }
 
 std::vector<std::shared_ptr<const KeyFrame>> MapDatabase::getAllKeyFrames() const
@@ -428,6 +459,54 @@ uint64_t MapDatabase::getNextKey() const
 uint64_t MapDatabase::incrementNextKey()
 {
   return next_keyframe_key_.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool MapDatabase::restore(const std::vector<KeyFrame> & keyframes, uint64_t next_key)
+{
+  std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+
+  std::unordered_map<uint64_t, Node> restored_nodes;
+  std::vector<uint64_t> restored_order;
+  restored_nodes.reserve(keyframes.size());
+  restored_order.reserve(keyframes.size());
+
+  std::optional<uint64_t> previous_key;
+
+  for (size_t i = 0; i < keyframes.size(); ++i) {
+    const auto & kf = keyframes[i];
+    const uint64_t current_key = kf.key;
+
+    if (!kf.scan || !kf.local_map || restored_nodes.find(current_key) != restored_nodes.end()) {
+      return false;
+    }
+
+    Node node;
+    node.keyframe = std::make_shared<KeyFrame>(kf);
+    node.order_index = i;
+    restored_nodes.emplace(current_key, std::move(node));
+    restored_order.push_back(current_key);
+
+    if (previous_key.has_value()) {
+      restored_nodes.at(*previous_key)
+        .outgoing_edges.push_back(Edge{current_key, EdgeType::Neighbor});
+      restored_nodes.at(current_key)
+        .incoming_edges.push_back(Edge{*previous_key, EdgeType::Neighbor});
+    }
+    previous_key = current_key;
+  }
+
+  if (
+    !restored_order.empty() &&
+    next_key <= *std::max_element(restored_order.begin(), restored_order.end())) {
+    return false;
+  }
+
+  nodes_ = std::move(restored_nodes);
+  keyframe_order_ = std::move(restored_order);
+  next_keyframe_key_.store(next_key, std::memory_order_relaxed);
+
+  rebuildSpatialIndex();
+  return true;
 }
 
 void MapDatabase::rebuildSpatialIndex()

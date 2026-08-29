@@ -2,10 +2,12 @@
 
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <set>
 #include <shared_mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -20,6 +22,7 @@
 #include "glidar_slam/core/scan_matcher/correlative_scan_matcher.hpp"
 #include "glidar_slam/core/scan_matcher/ground_marking_matcher.hpp"
 #include "glidar_slam/core/sensor_data.hpp"
+#include "glidar_slam/core/state_serializer.hpp"
 #include "glidar_slam/core/submap_grid.hpp"
 #include "gtsam/geometry/Pose3.h"
 
@@ -38,7 +41,7 @@ public:
     double timestamp, const SensorData & sensor_data, const gtsam::Pose3 & odom_pose,
     const gtsam::Matrix66 & odom_covariance);
 
-  std::optional<gtsam::Pose3> getLatestPose() const;
+  gtsam::Pose3 getLatestPose() const;
   std::optional<CsmResult::DebugImage> getLatestLowResDebug() const;
   std::optional<CsmResult::DebugImage> getLatestHighResDebug() const;
   std::optional<GroundPlaneObservation> getLatestGroundObservation() const;
@@ -54,9 +57,23 @@ public:
 
   gtsam::Pose3 getMapToOdom() const;
   std::shared_ptr<const GlobalMapSnapshot> getLatestGlobalMap() const;
+  std::size_t getFactorCount() const;
+
+  bool saveState(const std::filesystem::path & path, std::string * error = nullptr) const;
+  bool loadState(
+    const std::filesystem::path & path, const gtsam::Pose3 & initial_map_pose,
+    bool use_saved_pose = false, std::string * error = nullptr);
 
 private:
   bool shouldCreateKeyFrame(const gtsam::Pose3 & current_odom_pose) const;
+
+  void handleGroundConstraint(
+    std::optional<GroundPlaneObservation> & ground_observation, uint64_t next_keyframe_key);
+
+  void handleGroundMatchingConstraint(
+    const std::shared_ptr<const KeyFrame> & reference_keyframe,
+    std::optional<GroundPlaneObservation> & ground_observation, const gtsam::Pose3 & current_guess,
+    uint64_t next_keyframe_key);
 
   void rebuildSubmap();
 
@@ -79,14 +96,20 @@ private:
   std::unique_ptr<SubmapGrid> submap_grid_;
 
   gtsam::Pose3 latest_map_to_odom_;
-  mutable std::mutex latest_map_to_odom_mutex_;
-  std::optional<gtsam::Pose3> latest_pose_;
+  gtsam::Pose3 latest_pose_;
+
   std::optional<CsmResult::DebugImage> latest_low_res_debug_;
   std::optional<CsmResult::DebugImage> latest_high_res_debug_;
   std::optional<GroundPlaneObservation> latest_ground_observation_;
   std::optional<PointCloudXYZRGBA> latest_ground_matching_debug_;
-  mutable std::mutex latest_output_mutex_;
+
   bool loop_closure_optimization_pending_{false};
+  bool tracking_reset_pending_{false};
+  gtsam::Pose3 tracking_reset_pose_;
+
+  mutable std::mutex latest_map_to_odom_mutex_;
+  mutable std::mutex latest_output_mutex_;
+  mutable std::mutex state_mutex_;
 };
 
 }  // namespace glidar_slam::core

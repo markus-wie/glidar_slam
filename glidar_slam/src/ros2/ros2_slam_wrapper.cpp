@@ -207,6 +207,7 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   camera_callback_group_ =
     this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   map_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  state_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   transform_broadcast_callback_group_ =
     this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
@@ -225,6 +226,18 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     parameters_->odom_topic, rclcpp::SensorDataQoS(),
     std::bind(&Ros2SlamWrapper::odomCallback, this, std::placeholders::_1),
     odom_subscription_options);
+
+  save_state_service_ = this->create_service<glidar_slam_msgs::srv::SaveSlamState>(
+    "save_state",
+    std::bind(
+      &Ros2SlamWrapper::saveStateCallback, this, std::placeholders::_1, std::placeholders::_2),
+    rclcpp::ServicesQoS(), state_callback_group_);
+
+  load_state_service_ = this->create_service<glidar_slam_msgs::srv::LoadSlamState>(
+    "load_state",
+    std::bind(
+      &Ros2SlamWrapper::loadStateCallback, this, std::placeholders::_1, std::placeholders::_2),
+    rclcpp::ServicesQoS(), state_callback_group_);
 
   scan_subscriber_.subscribe(this, parameters_->scan_topic, 5);
   color_image_subscriber_.subscribe(this, parameters_->color_image_topic, 5);
@@ -277,6 +290,57 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   slam_system_ = std::make_unique<SlamSystem>(
     parameters_, loadScanMatcher("csm_local_tracker"),
     loadScanMatcher("csm_ground_marking_detection"), loadScanMatcher("csm_loop_closure_detection"));
+}
+
+void Ros2SlamWrapper::saveStateCallback(
+  std::shared_ptr<glidar_slam_msgs::srv::SaveSlamState::Request> request,
+  std::shared_ptr<glidar_slam_msgs::srv::SaveSlamState::Response> response)
+{
+  if (request->path.empty()) {
+    response->success = false;
+    response->message = "Path is empty";
+    return;
+  }
+
+  std::string error;
+  response->success = slam_system_->saveState(request->path, &error);
+  response->message = response->success ? "SLAM state saved" : error;
+
+  response->keyframe_count = slam_system_->getKeyFrames().size();
+  response->factor_count = slam_system_->getFactorCount();
+}
+
+void Ros2SlamWrapper::loadStateCallback(
+  std::shared_ptr<glidar_slam_msgs::srv::LoadSlamState::Request> request,
+  std::shared_ptr<glidar_slam_msgs::srv::LoadSlamState::Response> response)
+{
+  if (request->path.empty()) {
+    response->success = false;
+    response->message = "Path is empty";
+    return;
+  }
+
+  const gtsam::Pose3 initial_map_pose(
+    gtsam::Rot3::Quaternion(
+      request->initial_map_pose.orientation.w, request->initial_map_pose.orientation.x,
+      request->initial_map_pose.orientation.y, request->initial_map_pose.orientation.z),
+    gtsam::Point3(
+      request->initial_map_pose.position.x, request->initial_map_pose.position.y,
+      request->initial_map_pose.position.z));
+
+  std::string error;
+  response->success =
+    slam_system_->loadState(request->path, &error, request->reset_tracking, initial_map_pose);
+  response->message = response->success ? "SLAM state loaded" : error;
+
+  const std::vector<std::shared_ptr<const KeyFrame>> & keyframes = slam_system_->getKeyFrames();
+
+  response->keyframe_count = slam_system_->getKeyFrames().size();
+  response->factor_count = slam_system_->getFactorCount();
+
+  if (response->success) {
+    publishGraph(keyframes, slam_system_->getEdges());
+  }
 }
 
 std::unique_ptr<ScanMatcherInterface> Ros2SlamWrapper::loadScanMatcher(const std::string & name)
@@ -540,13 +604,7 @@ void Ros2SlamWrapper::ScanRGBDCallback(
     return;
   }
 
-  const std::optional<gtsam::Pose3> optimized_pose = slam_system_->getLatestPose();
-  if (!optimized_pose) {
-    RCLCPP_WARN(
-      this->get_logger(),
-      "SLAM system did not return an optimized pose. This should never happen.");
-    return;
-  }
+  const gtsam::Pose3 optimized_pose = slam_system_->getLatestPose();
 
   std::vector<std::shared_ptr<const KeyFrame>> keyframes = slam_system_->getKeyFrames();
 

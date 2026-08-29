@@ -254,6 +254,27 @@ void SubmapGrid::removeOldestKeyframe()
   }
 }
 
+void SubmapGrid::reset()
+{
+  {
+    std::lock_guard<std::mutex> lock(field_cache_mutex_);
+    field_cache_.clear();
+  }
+
+  active_keyframes_.clear();
+  cached_world_points_.clear();
+
+  for (auto & [resolution, grid] : grids_) {
+    grid.counts.clear();
+    grid.active_index.clear();
+    grid.active_cells.clear();
+    grid.origin_x = 0;
+    grid.origin_y = 0;
+    grid.width = 0;
+    grid.height = 0;
+  }
+}
+
 size_t SubmapGrid::size() const
 {
   return active_keyframes_.size();
@@ -267,9 +288,12 @@ std::shared_ptr<LikelihoodField> SubmapGrid::getLikelihoodField(
     throw std::invalid_argument("Requested resolution is not configured in SubmapGrid");
   }
 
-  if (field_cache_.find(resolution) != field_cache_.end()) {
+  {
     std::lock_guard<std::mutex> lock(field_cache_mutex_);
-    return field_cache_.at(resolution);
+    auto it = field_cache_.find(resolution);
+    if (it != field_cache_.end()) {
+      return it->second;
+    }
   }
 
   std::chrono::steady_clock::time_point start_time;

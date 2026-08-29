@@ -18,6 +18,8 @@ public:
   void add(const std::vector<Point2D> & points, uint64_t keyframe_id);
   void remove(uint64_t keyframe_id);
 
+  void reset();
+
   void removeOldestKeyframe();
 
   size_t size() const;

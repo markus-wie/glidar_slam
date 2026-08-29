@@ -131,7 +131,7 @@ void MapBuilder::run()
     {
       std::unique_lock<std::mutex> lock(mutex_);
       condition_variable_.wait(lock, [this] {
-        return stopping_ || !pending_.empty();
+        return stopping_ || rebuild_requested_ || !pending_.empty();
       });
       if (stopping_ && pending_.empty()) {
         if (!rebuild_requested_) {
@@ -156,10 +156,8 @@ void MapBuilder::run()
           apply(*item);
         }
       }
-    } else {
-      if (keyframe) {
-        apply(*keyframe);
-      }
+    } else if (keyframe) {
+      apply(*keyframe);
     }
     publish();
   }

@@ -23,6 +23,7 @@ find_package(pcl_conversions REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(nanoflann REQUIRED)
 find_package(TBB REQUIRED)
+find_package(glidar_slam_msgs REQUIRED)
 
 include_directories(include)
 
@@ -43,6 +44,7 @@ add_library(${PROJECT_NAME}_core SHARED
   src/core/camera_model.cpp
   src/core/laser_scan.cpp
   src/core/sensor_data.cpp
+  src/core/state_serializer.cpp
 )
 
 target_precompile_headers(${PROJECT_NAME}_core PUBLIC
@@ -115,7 +117,6 @@ target_include_directories(${PROJECT_NAME}_ros2 SYSTEM PUBLIC
   ${Eigen3_INCLUDE_DIRS}
 )
 
-
 target_compile_features(${PROJECT_NAME}_ros2 PUBLIC cxx_std_17)
 
 target_link_libraries(${PROJECT_NAME}_ros2
@@ -125,6 +126,7 @@ target_link_libraries(${PROJECT_NAME}_ros2
   ${sensor_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
   ${visualization_msgs_TARGETS}
+  ${glidar_slam_msgs_TARGETS}
   tf2_ros::tf2_ros
   cv_bridge::cv_bridge
   message_filters::message_filters

@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "glidar_slam/core/key_frame.hpp"
-#include "glidar_slam/core/map_builder.hpp"
+#include "glidar_slam/core/state_snapshot.hpp"
 
 namespace glidar_slam::core {
 
@@ -38,15 +38,14 @@ public:
 
   void addEdge(uint64_t from_key, uint64_t to_key, EdgeType type = EdgeType::Neighbor);
 
-  std::vector<MapKeyFrameSnapshot> updatePoses(
+  std::vector<std::shared_ptr<const KeyFrame>> updatePoses(
     const gtsam::Values & optimized_values,
     const std::unordered_map<uint64_t, gtsam::Matrix66> & optimized_covariances = {});
 
-  std::shared_ptr<const KeyFrame> getSnapshot(uint64_t key) const;
-  std::vector<std::shared_ptr<const KeyFrame>> getSnapshots() const;
-
   std::vector<std::shared_ptr<const KeyFrame>> getNearbyKeyFrames(
     const gtsam::Pose3 & query_pose, double radius) const;
+
+  std::shared_ptr<const KeyFrame> getClosestKeyFrame(const gtsam::Pose3 & query_pose) const;
 
   std::vector<std::shared_ptr<const KeyFrame>> getAllKeyFrames() const;
 
@@ -67,7 +66,8 @@ public:
   size_t size() const;
 
   uint64_t getNextKey() const;
-  uint64_t incrementNextKey();
+
+  bool restore(const std::vector<KeyFrame> & keyframes, uint64_t next_key);
 
 private:
   struct Edge
@@ -86,6 +86,8 @@ private:
     std::vector<Edge> incoming_edges;  // Used for reverse topological traversal
     std::vector<Edge> outgoing_edges;  // Used for forward traversal / loop closure extraction
   };
+
+  uint64_t incrementNextKey();
 
   void addEdgeInternal(uint64_t from_key, uint64_t to_key, EdgeType type);
 

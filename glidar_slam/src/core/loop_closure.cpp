@@ -62,6 +62,7 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
 
   std::shared_ptr<const KeyFrame> best_candidate;
   double best_mahalanobis_squared = std::numeric_limits<double>::infinity();
+
   for (const std::shared_ptr<const KeyFrame> & candidate : nearby_keyframes) {
     double mahalanobis_squared = std::numeric_limits<double>::infinity();
 
@@ -69,12 +70,25 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
       map_database_->getKeyFrameOrderDistance(candidate->key, query.key);
 
     if (order_distance < parameters_->loop_minimum_key_separation) {
+      if (parameters_->loop_debug_enable) {
+        SAM_INFO(
+          "Loop candidate rejected: query={}, candidate={}, order_distance={}, "
+          "minimum_key_separation={}",
+          query.key, candidate->key, order_distance, parameters_->loop_minimum_key_separation);
+      }
       continue;
     }
 
     if (!isCandidate(query, *candidate, mahalanobis_squared)) {
       continue;
     }
+
+    if (parameters_->loop_debug_enable) {
+      SAM_INFO(
+        "Loop closure candidate: query={}, candidate={}, order_distance={}, mahalanobis_squared={}",
+        query.key, candidate->key, order_distance, mahalanobis_squared);
+    }
+
     if (mahalanobis_squared < best_mahalanobis_squared) {
       best_mahalanobis_squared = mahalanobis_squared;
       best_candidate = candidate;
@@ -231,6 +245,13 @@ bool LoopClosureDetector::isCandidate(
 
   // Hard yaw check is good for early rejection
   if (std::abs(relative_pose.rotation().yaw()) > parameters_->loop_maximum_yaw_difference) {
+    if (parameters_->loop_debug_enable) {
+      SAM_INFO(
+        "Loop candidate rejected: query={}, candidate={}, yaw_difference={}, "
+        "maximum_yaw_difference={}",
+        query.key, candidate.key, std::abs(relative_pose.rotation().yaw()),
+        parameters_->loop_maximum_yaw_difference);
+    }
     return false;
   }
 
@@ -275,7 +296,16 @@ bool LoopClosureDetector::isCandidate(
       mahalanobis_limit, mahalanobis_squared <= mahalanobis_limit);
   }
 
-  return mahalanobis_squared <= mahalanobis_limit;
+  bool rejected = mahalanobis_squared > mahalanobis_limit;
+
+  if (rejected && parameters_->loop_debug_enable) {
+    SAM_INFO(
+      "Loop candidate rejected: query={}, candidate={}, mahalanobis_squared={}, "
+      "mahalanobis_limit={}",
+      query.key, candidate.key, mahalanobis_squared, mahalanobis_limit);
+  }
+
+  return !rejected;
 }
 
 void LoopClosureDetector::start()
@@ -299,6 +329,10 @@ void LoopClosureDetector::stop()
       return;
     }
     stopping_ = true;
+    // Proposals and queries belong to the old graph. Keeping them across a state load can add
+    // constraints computed from poses that no longer exist in the restored state.
+    input_queue_.clear();
+    output_queue_.clear();
   }
   condition_variable_.notify_all();
 
@@ -348,7 +382,7 @@ void LoopClosureDetector::run()
         return stopping_ || !input_queue_.empty();
       });
 
-      if (stopping_ && input_queue_.empty()) {
+      if (stopping_) {
         return;
       }
 
