@@ -96,4 +96,14 @@ PointCloudXYZPtr voxelize(const PointCloudXYZConstPtr & pcl, double voxel_size)
   return voxelized_cloud;
 }
 
+float probFromLogOdds(float log_odds)
+{
+  return 1.0f - 1.0f / (1.0f + std::exp(log_odds));
+}
+
+float logOddsFromProb(float prob)
+{
+  return std::log(prob / (1.0f - prob));
+}
+
 }  // namespace glidar_slam::core::utils

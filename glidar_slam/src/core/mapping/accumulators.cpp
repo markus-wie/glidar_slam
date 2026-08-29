@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <limits>
 
+#include "glidar_slam/core/utils.hpp"
+
 namespace glidar_slam::core::mapping {
 
 namespace {
@@ -85,16 +87,25 @@ std::optional<OccupancyGrid> OccupancyAccumulator::publish() const
   info.width = static_cast<std::uint32_t>(max_x - min_x + 1);
   info.height = static_cast<std::uint32_t>(max_y - min_y + 1);
 
+  const float log_odds_threshold =
+    utils::logOddsFromProb(static_cast<float>(parameters_->mapping_occupancy_threshold));
+  const float log_odds_cap_min =
+    utils::logOddsFromProb(static_cast<float>(parameters_->mapping_prob_cap_min));
+  const float log_odds_cap_max =
+    utils::logOddsFromProb(static_cast<float>(parameters_->mapping_prob_cap_max));
+
   std::vector<std::int8_t> data(static_cast<std::size_t>(info.width) * info.height, -1);
   for (const auto & [key, value] : evidence_) {
     if (std::abs(value) < 1e-5f) {
       continue;
     }
 
+    const float clamped_value = std::clamp(value, log_odds_cap_min, log_odds_cap_max);
+
     const auto [x, y] = cellCoordinates(key);
     const std::size_t index = static_cast<std::size_t>(y - min_y) * info.width + (x - min_x);
 
-    data[index] = value < 0.0f ? 0 : 100;
+    data[index] = clamped_value > log_odds_threshold ? 100 : 0;
   }
 
   return std::make_optional(OccupancyGrid(info, std::move(data)));
@@ -148,16 +159,25 @@ std::optional<GroundMarkingGrid> GroundMarkingAccumulator::publish() const
   info.width = static_cast<std::uint32_t>(max_x - min_x + 1);
   info.height = static_cast<std::uint32_t>(max_y - min_y + 1);
 
+  const float log_odds_threshold =
+    utils::logOddsFromProb(static_cast<float>(parameters_->mapping_occupancy_threshold));
+  const float log_odds_cap_min =
+    utils::logOddsFromProb(static_cast<float>(parameters_->mapping_prob_cap_min));
+  const float log_odds_cap_max =
+    utils::logOddsFromProb(static_cast<float>(parameters_->mapping_prob_cap_max));
+
   std::vector<std::int8_t> data(static_cast<std::size_t>(info.width) * info.height, 0);
   for (const auto & [key, value] : marking_) {
     if (std::abs(value) < 1e-5f) {
       continue;
     }
 
+    const float clamped_value = std::clamp(value, log_odds_cap_min, log_odds_cap_max);
+
     const auto [x, y] = cellCoordinates(key);
     const std::size_t index = static_cast<std::size_t>(y - min_y) * info.width + (x - min_x);
 
-    data[index] = value > 0.0f ? 100 : 0;
+    data[index] = clamped_value > log_odds_threshold ? 100 : 0;
   }
 
   return std::make_optional(GroundMarkingGrid(info, std::move(data)));

@@ -120,11 +120,14 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->declare_parameter<bool>("mapping.ground.enable_texture_mapping", true);
   parameters_->mapping_ground_enable_ground_marking_mapping =
     this->declare_parameter<bool>("mapping.ground.enable_ground_marking_mapping", false);
-  parameters_->mapping_threshold = this->declare_parameter<int>("mapping.threshold", 200);
-  parameters_->mapping_log_odds_hit = this->declare_parameter<double>("mapping.log_odds_hit", 0.8);
-  parameters_->mapping_log_odds_miss =
-    this->declare_parameter<double>("mapping.log_odds_miss", 0.35);
-  parameters_->mapping_log_odds_cap = this->declare_parameter<double>("mapping.log_odds_cap", 15.0);
+  parameters_->mapping_occupancy_threshold =
+    this->declare_parameter<double>("mapping.occupancy.threshold", 0.5);
+  parameters_->mapping_prob_hit = this->declare_parameter<double>("mapping.prob_hit", 0.8);
+  parameters_->mapping_prob_miss = this->declare_parameter<double>("mapping.prob_miss", 0.35);
+  parameters_->mapping_prob_cap_min =
+    this->declare_parameter<double>("mapping.prob_cap_min", 0.1192);
+  parameters_->mapping_prob_cap_max =
+    this->declare_parameter<double>("mapping.prob_cap_max", 0.971);
 
   parameters_->ground_optimization_enable =
     this->declare_parameter<bool>("ground_optimization_enable", true);
@@ -548,17 +551,20 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
     } else if (name == "mapping.ground.resolution") {
       updated.mapping_ground_resolution = parameter.as_double();
       rebuild_global_map = true;
-    } else if (name == "mapping.threshold") {
-      updated.mapping_threshold = static_cast<int>(parameter.as_int());
+    } else if (name == "mapping.occupancy_threshold") {
+      updated.mapping_occupancy_threshold = parameter.as_double();
       rebuild_global_map = true;
-    } else if (name == "mapping.log_odds_hit") {
-      updated.mapping_log_odds_hit = parameter.as_double();
+    } else if (name == "mapping.prob_hit") {
+      updated.mapping_prob_hit = parameter.as_double();
       rebuild_global_map = true;
-    } else if (name == "mapping.log_odds_miss") {
-      updated.mapping_log_odds_miss = parameter.as_double();
+    } else if (name == "mapping.prob_miss") {
+      updated.mapping_prob_miss = parameter.as_double();
       rebuild_global_map = true;
-    } else if (name == "mapping.log_odds_cap") {
-      updated.mapping_log_odds_cap = parameter.as_double();
+    } else if (name == "mapping.prob_cap_min") {
+      updated.mapping_prob_cap_min = parameter.as_double();
+      rebuild_global_map = true;
+    } else if (name == "mapping.prob_cap_max") {
+      updated.mapping_prob_cap_max = parameter.as_double();
       rebuild_global_map = true;
     } else if (name == "ground_matching_enable") {
       updated.ground_matching_enable = parameter.as_bool();
@@ -590,10 +596,11 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
   }
 
   if (
-    !std::isfinite(updated.mapping_log_odds_hit) || updated.mapping_log_odds_hit <= 0.0 ||
-    updated.mapping_log_odds_hit >= 1.0 || !std::isfinite(updated.mapping_log_odds_miss) ||
-    updated.mapping_log_odds_miss <= 0.0 || updated.mapping_log_odds_miss >= 1.0 ||
-    !std::isfinite(updated.mapping_log_odds_cap) || updated.mapping_log_odds_cap <= 0.0 ||
+    !std::isfinite(updated.mapping_prob_hit) || updated.mapping_prob_hit <= 0.0 ||
+    updated.mapping_prob_hit >= 1.0 || !std::isfinite(updated.mapping_prob_miss) ||
+    updated.mapping_prob_miss <= 0.0 || updated.mapping_prob_miss >= 1.0 ||
+    !std::isfinite(updated.mapping_prob_cap_min) || updated.mapping_prob_cap_min <= 0.0 ||
+    !std::isfinite(updated.mapping_prob_cap_max) || updated.mapping_prob_cap_max <= 0.0 ||
     !std::isfinite(updated.ground_matching_minimum_score) ||
     updated.ground_matching_minimum_score < 0.0) {
     result.successful = false;

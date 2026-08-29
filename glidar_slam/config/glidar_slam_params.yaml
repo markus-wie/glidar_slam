@@ -34,9 +34,9 @@ glidar_slam:
     # Startup Parameters
     startup:
       mode: "mapping" # "mapping" or "localization"
-      map_load_path: "" #"/workspaces/ros2/glidar_slam_state.bin"
+      map_load_path: "/workspaces/ros2/glidar_slam_state.bin"
       initial_pose:
-        use_provided: true
+        use_provided: false
         pose: [0.0, 0.0, 0.0] # [x, y, yaw]
 
     # Localization Parameters
@@ -48,9 +48,9 @@ glidar_slam:
     # Timing diagnostics for the SLAM pipeline and loop-closure worker.
     debug_timings: false
     # Debugging for the ground plane extraction and factor
-    ground_debug_enable: true
+    ground_debug_enable: false
     # Debugging for the ground plane matching
-    ground_matching_debug_enable: true
+    ground_matching_debug_enable: false
     # Debugging for the loop closure detection
     loop_debug_enable: false
 
@@ -75,9 +75,10 @@ glidar_slam:
         enable_texture_mapping: true
         enable_ground_marking_mapping: true
       threshold: 200
-      log_odds_hit: 0.9
-      log_odds_miss: 0.3
-      log_odds_cap: 15.0
+      prob_hit: 0.7
+      prob_miss: 0.4
+      prob_cap_min: 0.1192
+      prob_cap_max: 0.971
 
     #### GROUND FACTOR ####
     # Ground Observation Parameters

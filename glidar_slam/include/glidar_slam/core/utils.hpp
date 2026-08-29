@@ -28,4 +28,7 @@ PointCloudXYZPtr transformScanPoints(const PointCloudXYZConstPtr & scan, const g
 
 PointCloudXYZPtr voxelize(const PointCloudXYZConstPtr & pcl, double voxel_size);
 
+float probFromLogOdds(float log_odds);
+float logOddsFromProb(float prob);
+
 }  // namespace glidar_slam::core::utils

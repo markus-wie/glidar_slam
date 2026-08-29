@@ -4,6 +4,7 @@
 
 #include "glidar_slam/core/parameters.hpp"
 #include "glidar_slam/core/types.hpp"
+#include "glidar_slam/core/utils.hpp"
 
 namespace glidar_slam::core::mapping {
 
@@ -18,85 +19,7 @@ int cellCoordinate(float value, double resolution)
   return static_cast<int>(std::floor(static_cast<double>(value) / resolution));
 }
 
-template <typename Visitor>
-void raytraceLine(int x0, int y0, int x1, int y1, const Visitor & visitor)
-{
-  const int dx = std::abs(x1 - x0);
-  const int sx = x0 < x1 ? 1 : -1;
-  const int dy = -std::abs(y1 - y0);
-  const int sy = y0 < y1 ? 1 : -1;
-  int error = dx + dy;
-  int x = x0;
-  int y = y0;
-
-  while (true) {
-    if (!visitor(x, y) || (x == x1 && y == y1)) {
-      return;
-    }
-    const int twice_error = 2 * error;
-    if (twice_error >= dy) {
-      error += dy;
-      x += sx;
-    }
-    if (twice_error <= dx) {
-      error += dx;
-      y += sy;
-    }
-  }
-}
-
 }  // namespace
-
-// LocalOccupancyMap buildOccupancy(const PointCloudXYZConstPtr & scan, const Parameters &
-// parameters)
-// {
-//   LocalOccupancyMap result;
-//   result.resolution = parameters.mapping_occupancy_resolution;
-//   if (result.resolution <= 0.0) {
-//     return result;
-//   }
-
-//   const float hit_log_odds = static_cast<float>(
-//     std::log(parameters.mapping_log_odds_hit / (1.0 - parameters.mapping_log_odds_hit)));
-//   const float miss_log_odds = static_cast<float>(
-//     std::log(parameters.mapping_log_odds_miss / (1.0 - parameters.mapping_log_odds_miss)));
-
-//   std::unordered_map<std::int64_t, float> evidence;
-
-//   for (const auto & point : scan->points) {
-//     if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
-//       continue;
-//     }
-
-//     const int target_x = cellCoordinate(point.x, result.resolution);
-//     const int target_y = cellCoordinate(point.y, result.resolution);
-
-//     // Raytrace misses
-//     raytraceLine(0, 0, target_x, target_y, [&](int x, int y) {
-//       if (x == target_x && y == target_y) {
-//         return false;
-//       }
-//       evidence[cellKey(x, y)] += miss_log_odds;
-//       return true;
-//     });
-
-//     // Raytrace hit
-//     evidence[cellKey(target_x, target_y)] += hit_log_odds;
-//   }
-
-//   result.cells.reserve(evidence.size());
-//   for (const auto & [key, value] : evidence) {
-//     if (std::abs(value) < 1e-5f) {
-//       continue;
-//     }
-//     result.cells.push_back(
-//       {static_cast<int>(key >> 32), static_cast<int>(static_cast<std::int32_t>(key &
-//       0xffffffff)),
-//        value});
-//   }
-
-//   return result;
-// }
 
 LocalOccupancyMap buildOccupancy(const PointCloudXYZConstPtr & scan, const Parameters & parameters)
 {
@@ -106,10 +29,10 @@ LocalOccupancyMap buildOccupancy(const PointCloudXYZConstPtr & scan, const Param
     return result;
   }
 
-  const float hit_log_odds = static_cast<float>(
-    std::log(parameters.mapping_log_odds_hit / (1.0 - parameters.mapping_log_odds_hit)));
-  const float miss_log_odds = static_cast<float>(
-    std::log(parameters.mapping_log_odds_miss / (1.0 - parameters.mapping_log_odds_miss)));
+  const float hit_log_odds =
+    utils::logOddsFromProb(static_cast<float>(parameters.mapping_prob_hit));
+  const float miss_log_odds =
+    utils::logOddsFromProb(static_cast<float>(parameters.mapping_prob_miss));
 
   std::unordered_set<std::int64_t> hits;
   std::unordered_set<std::int64_t> misses;
@@ -203,12 +126,15 @@ LocalGroundMap buildGround(const PointCloudXYZRGBAConstPtr & cloud, const Parame
     return result;
   }
 
-  const float hit = static_cast<float>(
-    std::log(parameters.mapping_log_odds_hit / (1.0 - parameters.mapping_log_odds_hit)));
+  const float hit =
+    static_cast<float>(std::log(parameters.mapping_prob_hit / (1.0 - parameters.mapping_prob_hit)));
   const float miss = static_cast<float>(
-    std::log(parameters.mapping_log_odds_miss / (1.0 - parameters.mapping_log_odds_miss)));
+    std::log(parameters.mapping_prob_miss / (1.0 - parameters.mapping_prob_miss)));
 
   result.cells.reserve(cloud->points.size());
+
+  const int threshold = static_cast<int>(parameters.mapping_occupancy_threshold * 255);
+
   for (const auto & point : cloud->points) {
     if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
       continue;
@@ -216,8 +142,8 @@ LocalGroundMap buildGround(const PointCloudXYZRGBAConstPtr & cloud, const Parame
 
     result.cells.push_back(
       {static_cast<int>(std::floor(point.x / result.resolution)),
-       static_cast<int>(std::floor(point.y / result.resolution)),
-       point.a >= parameters.mapping_threshold ? hit : miss, point.r, point.g, point.b});
+       static_cast<int>(std::floor(point.y / result.resolution)), point.a >= threshold ? hit : miss,
+       point.r, point.g, point.b});
   }
 
   return result;

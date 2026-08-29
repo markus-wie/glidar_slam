@@ -20,10 +20,12 @@ std::vector<Point2D> GroundMarkingMatcher::extractMarkingPoints(
   const int max_depth_sq =
     parameters_->ground_matching_max_distance * parameters_->ground_matching_max_distance;
 
+  const int threshold = static_cast<int>(parameters_->mapping_occupancy_threshold * 255);
+
   std::vector<Point2D> points;
   points.reserve(cloud->size());
   for (const auto & point : *cloud) {
-    if (point.a < parameters_->mapping_threshold) {
+    if (point.a < threshold) {
       continue;
     }
 

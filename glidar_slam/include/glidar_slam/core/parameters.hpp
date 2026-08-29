@@ -79,10 +79,11 @@ struct Parameters
   double mapping_ground_resolution{0.02};
   bool mapping_ground_enable_texture_mapping{true};
   bool mapping_ground_enable_ground_marking_mapping{false};
-  int mapping_threshold{200};
-  double mapping_log_odds_hit{0.8};
-  double mapping_log_odds_miss{0.35};
-  double mapping_log_odds_cap{15.0};
+  double mapping_occupancy_threshold{0.5};
+  double mapping_prob_hit{0.7};
+  double mapping_prob_miss{0.4};
+  double mapping_prob_cap_min{0.1192};
+  double mapping_prob_cap_max{0.971};
 
   // Ground Factor
   bool ground_optimization_enable{true};
@@ -175,10 +176,11 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << (p.mapping_ground_enable_texture_mapping ? "true" : "false") << ",\n"
      << "  mapping_ground_enable_ground_marking_mapping: "
      << (p.mapping_ground_enable_ground_marking_mapping ? "true" : "false") << ",\n"
-     << "  mapping_threshold: " << p.mapping_threshold << ",\n"
-     << "  mapping_log_odds_hit: " << p.mapping_log_odds_hit << ",\n"
-     << "  mapping_log_odds_miss: " << p.mapping_log_odds_miss << ",\n"
-     << "  mapping_log_odds_cap: " << p.mapping_log_odds_cap << ",\n"
+     << "  mapping_occupancy_threshold: " << p.mapping_occupancy_threshold << ",\n"
+     << "  mapping_prob_hit: " << p.mapping_prob_hit << ",\n"
+     << "  mapping_prob_miss: " << p.mapping_prob_miss << ",\n"
+     << "  mapping_prob_cap_min: " << p.mapping_prob_cap_min << ",\n"
+     << "  mapping_prob_cap_max: " << p.mapping_prob_cap_max << ",\n"
      << "  ground_optimization_enable: " << (p.ground_optimization_enable ? "true" : "false")
      << ",\n"
      << "  ground_normal_sigma: " << p.ground_normal_sigma << ",\n"
