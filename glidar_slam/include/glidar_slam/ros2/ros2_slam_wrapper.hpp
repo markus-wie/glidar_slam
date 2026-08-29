@@ -8,12 +8,14 @@
 #include <vector>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "glidar_slam/core/parameters.hpp"
 #include "glidar_slam/core/system.hpp"
 #include "glidar_slam/ros2/scan_matcher_interface.hpp"
 #include "glidar_slam_msgs/srv/load_slam_state.hpp"
 #include "glidar_slam_msgs/srv/save_slam_state.hpp"
+#include "glidar_slam_msgs/srv/set_localization_mode.hpp"
 #include "gtsam/geometry/Pose3.h"
 #include "message_filters/subscriber.hpp"
 #include "message_filters/sync_policies/approximate_time.hpp"
@@ -62,10 +64,15 @@ private:
     std::shared_ptr<glidar_slam_msgs::srv::LoadSlamState::Request> request,
     std::shared_ptr<glidar_slam_msgs::srv::LoadSlamState::Response> response);
 
+  void setLocalizationModeCallback(
+    std::shared_ptr<glidar_slam_msgs::srv::SetLocalizationMode::Request> request,
+    std::shared_ptr<glidar_slam_msgs::srv::SetLocalizationMode::Response> response);
+
   void publishGraph(
     const std::vector<std::shared_ptr<const KeyFrame>> & keyframes,
     const std::vector<GraphEdge> & edges);
   void publishMapToOdom();
+  void publishPoseEstimate(const rclcpp::Time & stamp);
   void publishMapsTimerCallback();
   void publishOccupancyGrid(
     const std::shared_ptr<const glidar_slam::core::GlobalMapSnapshot> & snapshot,
@@ -150,6 +157,8 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_subscriber_;
   rclcpp::Service<glidar_slam_msgs::srv::SaveSlamState>::SharedPtr save_state_service_;
   rclcpp::Service<glidar_slam_msgs::srv::LoadSlamState>::SharedPtr load_state_service_;
+  rclcpp::Service<glidar_slam_msgs::srv::SetLocalizationMode>::SharedPtr
+    set_localization_mode_service_;
 
   using GroundSyncPolicy = message_filters::sync_policies::ApproximateTime<
     sensor_msgs::msg::LaserScan, sensor_msgs::msg::Image, sensor_msgs::msg::Image,
@@ -173,6 +182,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr ground_debug_image_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr csm_debug_low_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr csm_debug_high_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr estimated_pose_pub_;
 
   rclcpp::TimerBase::SharedPtr transform_broadcast_timer_;
   rclcpp::TimerBase::SharedPtr map_timer_;

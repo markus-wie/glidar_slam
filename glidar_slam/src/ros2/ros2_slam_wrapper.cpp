@@ -1,6 +1,7 @@
 #include "glidar_slam/ros2/ros2_slam_wrapper.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -197,6 +198,9 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   parameters_->loop_mahalanobis_threshold =
     this->declare_parameter<double>("loop_mahalanobis_threshold", 3.0);
   parameters_->loop_minimum_score = this->declare_parameter<double>("loop_minimum_score", 0.5);
+  parameters_->localization_minimum_score =
+    this->declare_parameter<double>("localization_minimum_score", 0.5);
+  this->declare_parameter<bool>("localization_mode", false);
   parameters_->debug_timings = this->declare_parameter<bool>("debug_timings", false);
 
   scan_matcher_loader_ = std::make_unique<pluginlib::ClassLoader<ScanMatcherInterface>>(
@@ -238,6 +242,12 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     std::bind(
       &Ros2SlamWrapper::loadStateCallback, this, std::placeholders::_1, std::placeholders::_2),
     rclcpp::ServicesQoS(), state_callback_group_);
+  set_localization_mode_service_ = this->create_service<glidar_slam_msgs::srv::SetLocalizationMode>(
+    "set_localization_mode",
+    std::bind(
+      &Ros2SlamWrapper::setLocalizationModeCallback, this, std::placeholders::_1,
+      std::placeholders::_2),
+    rclcpp::ServicesQoS(), state_callback_group_);
 
   scan_subscriber_.subscribe(this, parameters_->scan_topic, 5);
   color_image_subscriber_.subscribe(this, parameters_->color_image_topic, 5);
@@ -277,6 +287,8 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->create_publisher<sensor_msgs::msg::Image>(parameters_->csm_debug_low_topic, 10);
   csm_debug_high_publisher_ =
     this->create_publisher<sensor_msgs::msg::Image>(parameters_->csm_debug_high_topic, 10);
+  estimated_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+    "/glidar_slam/estimated_pose", 10);
 
   // Timer
   transform_broadcast_timer_ = this->create_wall_timer(
@@ -308,6 +320,7 @@ void Ros2SlamWrapper::saveStateCallback(
 
   response->keyframe_count = slam_system_->getKeyFrames().size();
   response->factor_count = slam_system_->getFactorCount();
+  response->localization_active = slam_system_->isLocalizationMode();
 }
 
 void Ros2SlamWrapper::loadStateCallback(
@@ -320,6 +333,36 @@ void Ros2SlamWrapper::loadStateCallback(
     return;
   }
 
+  std::string error;
+
+  const gtsam::Pose3 initial_map_pose(
+    gtsam::Rot3::Quaternion(
+      request->initial_map_pose.orientation.w, request->initial_map_pose.orientation.x,
+      request->initial_map_pose.orientation.y, request->initial_map_pose.orientation.z),
+    gtsam::Point3(
+      request->initial_map_pose.position.x, request->initial_map_pose.position.y,
+      request->initial_map_pose.position.z));
+
+  response->success = slam_system_->loadState(
+    request->path, initial_map_pose, request->use_saved_pose, request->localization_mode, &error);
+
+  response->message = response->success ? "SLAM state loaded" : error;
+
+  const std::vector<std::shared_ptr<const KeyFrame>> & keyframes = slam_system_->getKeyFrames();
+
+  response->keyframe_count = slam_system_->getKeyFrames().size();
+  response->factor_count = slam_system_->getFactorCount();
+  response->localization_active = slam_system_->isLocalizationMode();
+
+  if (response->success) {
+    publishGraph(keyframes, slam_system_->getEdges());
+  }
+}
+
+void Ros2SlamWrapper::setLocalizationModeCallback(
+  std::shared_ptr<glidar_slam_msgs::srv::SetLocalizationMode::Request> request,
+  std::shared_ptr<glidar_slam_msgs::srv::SetLocalizationMode::Response> response)
+{
   const gtsam::Pose3 initial_map_pose(
     gtsam::Rot3::Quaternion(
       request->initial_map_pose.orientation.w, request->initial_map_pose.orientation.x,
@@ -329,18 +372,10 @@ void Ros2SlamWrapper::loadStateCallback(
       request->initial_map_pose.position.z));
 
   std::string error;
-  response->success =
-    slam_system_->loadState(request->path, &error, request->reset_tracking, initial_map_pose);
-  response->message = response->success ? "SLAM state loaded" : error;
-
-  const std::vector<std::shared_ptr<const KeyFrame>> & keyframes = slam_system_->getKeyFrames();
-
-  response->keyframe_count = slam_system_->getKeyFrames().size();
-  response->factor_count = slam_system_->getFactorCount();
-
-  if (response->success) {
-    publishGraph(keyframes, slam_system_->getEdges());
-  }
+  response->success = slam_system_->setLocalizationMode(
+    request->enable, initial_map_pose, request->use_current_pose, &error);
+  response->message = response->success ? "localization mode updated" : error;
+  response->localization_active = slam_system_->isLocalizationMode();
 }
 
 std::unique_ptr<ScanMatcherInterface> Ros2SlamWrapper::loadScanMatcher(const std::string & name)
@@ -462,6 +497,24 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.loop_mahalanobis_threshold = parameter.as_double();
     } else if (name == "loop_minimum_score") {
       updated.loop_minimum_score = parameter.as_double();
+    } else if (name == "localization_minimum_score") {
+      updated.localization_minimum_score = parameter.as_double();
+    } else if (name == "localization_mode") {
+      const bool enable = parameter.as_bool();
+      if (!slam_system_) {
+        if (enable) {
+          result.successful = false;
+          result.reason = "localization_mode can only be enabled after a map has been loaded";
+          return result;
+        }
+      } else if (enable != slam_system_->isLocalizationMode()) {
+        std::string error;
+        if (!slam_system_->setLocalizationMode(enable, gtsam::Pose3(), true, &error)) {
+          result.successful = false;
+          result.reason = error;
+          return result;
+        }
+      }
     } else if (name == "debug_timings") {
       updated.debug_timings = parameter.as_bool();
     }
@@ -604,7 +657,7 @@ void Ros2SlamWrapper::ScanRGBDCallback(
     return;
   }
 
-  const gtsam::Pose3 optimized_pose = slam_system_->getLatestPose();
+  publishPoseEstimate(scan_stamp);
 
   std::vector<std::shared_ptr<const KeyFrame>> keyframes = slam_system_->getKeyFrames();
 
@@ -636,6 +689,35 @@ void Ros2SlamWrapper::ScanRGBDCallback(
       this->get_logger(), "Publishing graph, occupancy grid, and ground map took %.2f ms",
       elapsed_ms);
   }
+}
+
+void Ros2SlamWrapper::publishPoseEstimate(const rclcpp::Time & stamp)
+{
+  const glidar_slam::core::PoseEstimate estimate = slam_system_->getLatestPoseAndCovariance();
+
+  geometry_msgs::msg::PoseWithCovarianceStamped message;
+  message.header.stamp = stamp;
+  message.header.frame_id = parameters_->map_frame;
+
+  const auto translation = estimate.pose.translation();
+  const auto quaternion = estimate.pose.rotation().toQuaternion();
+  message.pose.pose.position.x = translation.x();
+  message.pose.pose.position.y = translation.y();
+  message.pose.pose.position.z = translation.z();
+  message.pose.pose.orientation.w = quaternion.w();
+  message.pose.pose.orientation.x = quaternion.x();
+  message.pose.pose.orientation.y = quaternion.y();
+  message.pose.pose.orientation.z = quaternion.z();
+
+  constexpr std::array<int, 6> gtsam_to_ros{{3, 4, 5, 0, 1, 2}};
+  for (std::size_t row = 0; row < gtsam_to_ros.size(); ++row) {
+    for (std::size_t column = 0; column < gtsam_to_ros.size(); ++column) {
+      message.pose.covariance[row * gtsam_to_ros.size() + column] =
+        estimate.covariance(gtsam_to_ros[row], gtsam_to_ros[column]);
+    }
+  }
+
+  estimated_pose_pub_->publish(message);
 }
 
 void Ros2SlamWrapper::odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr & msg)

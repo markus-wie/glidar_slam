@@ -78,6 +78,32 @@ gtsam::Pose3 makePlanarPose(const gtsam::Pose3 & pose)
   return Utils::makePlanarPose(translation.x(), translation.y(), yaw);
 }
 
+gtsam::Matrix66 unobservablePoseCovariance(const Parameters & parameters)
+{
+  gtsam::Matrix66 covariance = gtsam::Matrix66::Zero();
+  covariance.diagonal().setConstant(parameters.unobservable_variance);
+  return covariance;
+}
+
+gtsam::Matrix66 csmCovarianceToPoseCovariance(
+  const Eigen::Matrix3d & covariance, double unobservable_variance)
+{
+  gtsam::Matrix66 pose_covariance = gtsam::Matrix66::Zero();
+  pose_covariance(0, 0) = unobservable_variance;
+  pose_covariance(1, 1) = unobservable_variance;
+  pose_covariance(2, 2) = covariance(2, 2);
+  pose_covariance(3, 3) = covariance(0, 0);
+  pose_covariance(4, 4) = covariance(1, 1);
+  pose_covariance(5, 5) = unobservable_variance;
+  pose_covariance(3, 4) = covariance(0, 1);
+  pose_covariance(4, 3) = covariance(1, 0);
+  pose_covariance(3, 2) = covariance(0, 2);
+  pose_covariance(2, 3) = covariance(2, 0);
+  pose_covariance(4, 2) = covariance(1, 2);
+  pose_covariance(2, 4) = covariance(2, 1);
+  return pose_covariance;
+}
+
 Eigen::Matrix3d transformScanMatchCovarianceToRelativeFrame(
   const Eigen::Matrix3d & covariance, const gtsam::Pose3 & reference_pose)
 {
@@ -155,6 +181,7 @@ SlamSystem::SlamSystem(
   std::unique_ptr<ScanMatcher> ground_scan_matcher, std::unique_ptr<ScanMatcher> loop_scan_matcher)
 : parameters_(parameters), scan_matcher_(std::move(scan_matcher))
 {
+  latest_pose_.covariance = unobservablePoseCovariance(*parameters_);
   map_database_ = std::make_shared<MapDatabase>();
   graph_optimizer_ = std::make_unique<GraphOptimizer>(parameters_);
   ground_marking_matcher_ =
@@ -227,7 +254,9 @@ bool SlamSystem::process(
   }
 
   const auto loop_proposals_start = std::chrono::steady_clock::now();
-  processLoopClosureProposals();
+  if (!localization_mode_) {
+    processLoopClosureProposals();
+  }
 
   if (parameters_->debug_timings) {
     loop_proposals_ms = elapsedMilliseconds(loop_proposals_start);
@@ -236,6 +265,100 @@ bool SlamSystem::process(
   const auto initialization_start = std::chrono::steady_clock::now();
 
   const gtsam::Pose3 latest_odom_pose = makePlanarPose(odom_pose);
+
+  if (localization_mode_) {
+    std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
+    if (!localization_initialized_) {
+      {
+        std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
+        latest_map_to_odom_ = latest_pose_.pose.compose(latest_odom_pose.inverse());
+
+        SAM_INFO(
+          "latest_pose: ({}, {}, {}), latest_odom_pose: ({}, {}, {}), latest_map_to_odom: ({}, {}, "
+          "{})",
+          latest_pose_.pose.translation().x(), latest_pose_.pose.translation().y(),
+          latest_pose_.pose.rotation().rpy().z(), latest_odom_pose.translation().x(),
+          latest_odom_pose.translation().y(), latest_odom_pose.rotation().rpy().z(),
+          latest_map_to_odom_.translation().x(), latest_map_to_odom_.translation().y(),
+          latest_map_to_odom_.rotation().rpy().z());
+      }
+
+      submap_grid_->reset();
+      auto nearby_keyframes = map_database_->getNearbyKeyFrames(latest_pose_.pose, 2);
+
+      for (const auto & kf : nearby_keyframes) {
+        std::vector<Point2D> pts = Utils::transformScanPoints(kf->scan->points2D(), kf->pose);
+        submap_grid_->add(pts, kf->key);
+      }
+
+      localization_submap_center_ = latest_pose_.pose;
+      localization_initialized_ = true;
+    }
+
+    gtsam::Pose3 current_guess;
+    {
+      std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
+      current_guess = latest_map_to_odom_.compose(latest_odom_pose);
+    }
+
+    const CsmResult result =
+      scan_matcher_->match(*submap_grid_, laser_scan->points2D(), Utils::toPose2D(current_guess));
+
+    std::chrono::steady_clock::time_point matching_time = std::chrono::steady_clock::now();
+
+    if (!std::isfinite(result.score) || result.score < parameters_->localization_minimum_score) {
+      SAM_WARN(
+        "Localization failed: score {} below threshold {}. Localization lost.", result.score,
+        parameters_->localization_minimum_score);
+      return false;  // Localization lost
+    }
+
+    gtsam::Pose3 optimized_pose = Utils::toPose3(result.optimized_pose);
+
+    {
+      std::lock_guard<std::mutex> lock(latest_output_mutex_);
+      latest_pose_.pose = optimized_pose;
+      latest_pose_.covariance =
+        csmCovarianceToPoseCovariance(result.covariance, parameters_->unobservable_variance);
+      latest_low_res_debug_ = result.low_res_debug;
+      latest_high_res_debug_ = result.high_res_debug;
+    }
+    {
+      std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
+      latest_map_to_odom_ = optimized_pose.compose(latest_odom_pose.inverse());
+    }
+
+    const double distance_moved =
+      (optimized_pose.translation() - localization_submap_center_.translation()).norm();
+    const double shift_threshold = parameters_->minimum_travel_distance;
+
+    if (distance_moved > shift_threshold) {
+      submap_grid_->reset();
+      auto nearby_keyframes = map_database_->getNearbyKeyFrames(optimized_pose, 2);
+      for (const auto & kf : nearby_keyframes) {
+        std::vector<Point2D> pts = Utils::transformScanPoints(kf->scan->points2D(), kf->pose);
+        submap_grid_->add(pts, kf->key);
+      }
+      localization_submap_center_ = optimized_pose;
+    }
+
+    std::chrono::steady_clock::time_point rebuild_time = std::chrono::steady_clock::now();
+
+    if (parameters_->debug_timings) {
+      const double matching_ms =
+        std::chrono::duration<double, std::milli>(matching_time - start_time).count();
+      const double rebuild_ms =
+        std::chrono::duration<double, std::milli>(rebuild_time - matching_time).count();
+      const double total_ms =
+        std::chrono::duration<double, std::milli>(rebuild_time - start_time).count();
+
+      SAM_INFO(
+        "Localization timing [ms]: matching={}, rebuild={}, total={}", matching_ms, rebuild_ms,
+        total_ms);
+    }
+
+    return true;
+  }
 
   const bool is_initialization = map_database_->size() == 0;
   if (is_initialization || tracking_reset_pending_) {
@@ -303,7 +426,8 @@ bool SlamSystem::process(
     // 4. Update internal states and Submap Grid
     {
       std::lock_guard<std::mutex> lock(latest_output_mutex_);
-      latest_pose_ = root_pose;
+      latest_pose_.pose = root_pose;
+      latest_pose_.covariance = unobservablePoseCovariance(*parameters_);
     }
     {
       std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
@@ -343,7 +467,7 @@ bool SlamSystem::process(
   if (!shouldCreateKeyFrame(latest_odom_pose)) {
     {
       std::lock_guard<std::mutex> lock(latest_output_mutex_);
-      latest_pose_ = current_guess;
+      latest_pose_.pose = current_guess;
     }
     {
       std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
@@ -392,26 +516,8 @@ bool SlamSystem::process(
   // Map the 3x3 CSM Covariance (x, y, yaw) to a 6x6 GTSAM Covariance Matrix
   const Eigen::Matrix3d relative_csm_covariance =
     transformScanMatchCovarianceToRelativeFrame(csm_result.covariance, reference_keyframe->pose);
-  gtsam::Matrix66 csm_covariance = gtsam::Matrix66::Zero();
-
-  // Inflate unobservable dimensions
-  const double INF_VAR = parameters_->unobservable_variance;
-
-  // Diagonal of csm_result.covariance:
-  // [ x-x, y-y, yaw-yaw ]
-  // gtsam covariance layout is [roll, pitch, yaw, x, y, z]
-  csm_covariance(0, 0) = INF_VAR;                        // roll-roll
-  csm_covariance(1, 1) = INF_VAR;                        // pitch-pitch
-  csm_covariance(2, 2) = relative_csm_covariance(2, 2);  // yaw-yaw
-  csm_covariance(3, 3) = relative_csm_covariance(0, 0);  // x-x
-  csm_covariance(4, 4) = relative_csm_covariance(1, 1);  // y-y
-  csm_covariance(5, 5) = INF_VAR;                        // z-z
-  csm_covariance(3, 4) = relative_csm_covariance(0, 1);  // x-y
-  csm_covariance(4, 3) = relative_csm_covariance(1, 0);  // y-x
-  csm_covariance(3, 2) = relative_csm_covariance(0, 2);  // x-yaw
-  csm_covariance(2, 3) = relative_csm_covariance(2, 0);  // yaw-x
-  csm_covariance(4, 2) = relative_csm_covariance(1, 2);  // y-yaw
-  csm_covariance(2, 4) = relative_csm_covariance(2, 1);  // yaw-y
+  const gtsam::Matrix66 csm_covariance =
+    csmCovarianceToPoseCovariance(relative_csm_covariance, parameters_->unobservable_variance);
 
   if (parameters_->debug_timings) {
     SAM_INFO(
@@ -561,7 +667,8 @@ bool SlamSystem::process(
 
   {
     std::lock_guard<std::mutex> lock(latest_output_mutex_);
-    latest_pose_ = optimized_pose;
+    latest_pose_.pose = optimized_pose;
+    latest_pose_.covariance = optimized_covariance;
   }
 
   if (parameters_->debug_timings) {
@@ -582,6 +689,12 @@ bool SlamSystem::process(
 }
 
 gtsam::Pose3 SlamSystem::getLatestPose() const
+{
+  std::lock_guard<std::mutex> lock(latest_output_mutex_);
+  return latest_pose_.pose;
+}
+
+PoseEstimate SlamSystem::getLatestPoseAndCovariance() const
 {
   std::lock_guard<std::mutex> lock(latest_output_mutex_);
   return latest_pose_;
@@ -629,8 +742,8 @@ bool SlamSystem::saveState(const std::filesystem::path & path, std::string * err
 }
 
 bool SlamSystem::loadState(
-  const std::filesystem::path & path, const gtsam::Pose3 & initial_map_pose,
-  bool use_saved_pose = false, std::string * error = nullptr)
+  const std::filesystem::path & path, const gtsam::Pose3 & initial_map_pose, bool use_saved_pose,
+  bool localization_only, std::string * error)
 {
   std::lock_guard<std::mutex> state_lock(state_mutex_);
 
@@ -675,7 +788,8 @@ bool SlamSystem::loadState(
 
   {
     std::lock_guard<std::mutex> lock(latest_output_mutex_);
-    latest_pose_ = starting_pose;
+    latest_pose_.pose = starting_pose;
+    latest_pose_.covariance = unobservablePoseCovariance(*parameters_);
     latest_low_res_debug_.reset();
     latest_high_res_debug_.reset();
     latest_ground_observation_.reset();
@@ -689,11 +803,89 @@ bool SlamSystem::loadState(
 
   submap_grid_ = std::make_unique<SubmapGrid>(scan_matcher_->fieldResolutions());
 
-  loop_closure_detector_->start();
-
   loop_closure_optimization_pending_ = false;
+  localization_mode_ = localization_only;
+  localization_initialized_ = false;
+
+  if (localization_mode_) {
+    tracking_reset_pending_ = false;
+    // resuming_saved_session_ = false;
+    SAM_INFO("Map loaded successfully in LOCALIZATION ONLY mode.");
+  } else if (use_saved_pose) {
+    // 1. Clean continuous resume: Link directly to the last keyframe
+    // resuming_saved_session_ = true;
+    tracking_reset_pending_ = false;
+    loop_closure_detector_->start();
+    SAM_INFO("Map loaded successfully. Resuming continuous SLAM session.");
+  } else {
+    // 2. Teleport / Relocalization: Needs proximity match
+    // resuming_saved_session_ = false;
+    tracking_reset_pending_ = true;
+    tracking_reset_pose_ = starting_pose;
+    loop_closure_detector_->start();
+    SAM_INFO("Map loaded successfully. Tracking reset pending at custom pose.");
+  }
+
+  return true;
+}
+
+bool SlamSystem::isLocalizationMode() const
+{
+  std::lock_guard<std::mutex> state_lock(state_mutex_);
+  return localization_mode_;
+}
+
+bool SlamSystem::setLocalizationMode(
+  bool enable, const gtsam::Pose3 & initial_map_pose, bool use_current_pose, std::string * error)
+{
+  std::lock_guard<std::mutex> state_lock(state_mutex_);
+
+  if (enable) {
+    if (localization_mode_) {
+      if (error) {
+        *error = "localization mode is already active";
+      }
+      return false;
+    }
+    if (map_database_->size() == 0) {
+      if (error) {
+        *error = "cannot enter localization mode without a loaded map";
+      }
+      return false;
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(latest_output_mutex_);
+      latest_pose_.pose = use_current_pose ? latest_pose_.pose : initial_map_pose;
+      latest_pose_.covariance = unobservablePoseCovariance(*parameters_);
+    }
+
+    localization_initialized_ = false;
+    localization_mode_ = true;
+
+    tracking_reset_pending_ = false;
+    loop_closure_detector_->stop();
+
+    return true;
+  }
+
+  if (!localization_mode_) {
+    if (error) {
+      *error = "localization mode is not active";
+    }
+    return false;
+  }
+
+  localization_mode_ = false;
+  localization_initialized_ = false;
+
   tracking_reset_pending_ = true;
-  tracking_reset_pose_ = starting_pose;
+  {
+    std::lock_guard<std::mutex> lock(latest_output_mutex_);
+    tracking_reset_pose_ = latest_pose_.pose;
+  }
+
+  loop_closure_detector_->start();
 
   return true;
 }

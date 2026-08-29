@@ -220,7 +220,7 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
   }
 
   std::vector<LoopClosureProposal> proposals;
-  if (best_candidate) {
+  if (best_candidate && proposal.score >= parameters_->loop_minimum_score) {
     proposals.push_back(proposal);
   }
 

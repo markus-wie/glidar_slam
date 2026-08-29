@@ -104,6 +104,7 @@ struct Parameters
   double loop_maximum_yaw_difference{1.0};
   double loop_mahalanobis_threshold{3.0};
   double loop_minimum_score{0.5};
+  double localization_minimum_score{0.5};
   bool debug_timings{false};
 
   // iSAM2 Parameters
@@ -198,6 +199,7 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  loop_mahalanobis_threshold: " << p.loop_mahalanobis_threshold << ",\n"
      << "  loop_minimum_score: " << p.loop_minimum_score << ",\n"
      << "  debug_timings: " << (p.debug_timings ? "true" : "false") << ",\n"
+     << "  localization_minimum_score: " << p.localization_minimum_score << ",\n"
      << "  isam_relinearizeThreshold: " << p.isam_relinearizeThreshold << ",\n"
      << "  isam_relinearizeSkip: " << p.isam_relinearizeSkip << "\n"
      << "}";

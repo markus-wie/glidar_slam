@@ -24,6 +24,7 @@
 #include "glidar_slam/core/sensor_data.hpp"
 #include "glidar_slam/core/state_serializer.hpp"
 #include "glidar_slam/core/submap_grid.hpp"
+#include "glidar_slam/core/types.hpp"
 #include "gtsam/geometry/Pose3.h"
 
 namespace glidar_slam::core {
@@ -42,6 +43,7 @@ public:
     const gtsam::Matrix66 & odom_covariance);
 
   gtsam::Pose3 getLatestPose() const;
+  PoseEstimate getLatestPoseAndCovariance() const;
   std::optional<CsmResult::DebugImage> getLatestLowResDebug() const;
   std::optional<CsmResult::DebugImage> getLatestHighResDebug() const;
   std::optional<GroundPlaneObservation> getLatestGroundObservation() const;
@@ -62,7 +64,12 @@ public:
   bool saveState(const std::filesystem::path & path, std::string * error = nullptr) const;
   bool loadState(
     const std::filesystem::path & path, const gtsam::Pose3 & initial_map_pose,
-    bool use_saved_pose = false, std::string * error = nullptr);
+    bool use_saved_pose = false, bool localization_only = false, std::string * error = nullptr);
+
+  bool isLocalizationMode() const;
+  bool setLocalizationMode(
+    bool enable, const gtsam::Pose3 & initial_map_pose, bool use_current_pose,
+    std::string * error = nullptr);
 
 private:
   bool shouldCreateKeyFrame(const gtsam::Pose3 & current_odom_pose) const;
@@ -96,7 +103,7 @@ private:
   std::unique_ptr<SubmapGrid> submap_grid_;
 
   gtsam::Pose3 latest_map_to_odom_;
-  gtsam::Pose3 latest_pose_;
+  PoseEstimate latest_pose_;
 
   std::optional<CsmResult::DebugImage> latest_low_res_debug_;
   std::optional<CsmResult::DebugImage> latest_high_res_debug_;
@@ -106,6 +113,9 @@ private:
   bool loop_closure_optimization_pending_{false};
   bool tracking_reset_pending_{false};
   gtsam::Pose3 tracking_reset_pose_;
+  bool localization_mode_{false};
+  bool localization_initialized_{false};
+  gtsam::Pose3 localization_submap_center_;
 
   mutable std::mutex latest_map_to_odom_mutex_;
   mutable std::mutex latest_output_mutex_;

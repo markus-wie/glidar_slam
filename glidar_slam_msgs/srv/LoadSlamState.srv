@@ -1,8 +1,10 @@
 string path
-bool reset_tracking
+bool localization_mode
+bool use_saved_pose
 geometry_msgs/Pose initial_map_pose
 ---
 bool success
 string message
 uint64 keyframe_count
 uint64 factor_count
+bool localization_active

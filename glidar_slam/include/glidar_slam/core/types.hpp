@@ -25,6 +25,12 @@ struct Pose2D
   double yaw;
 };
 
+struct PoseEstimate
+{
+  gtsam::Pose3 pose;
+  gtsam::Matrix66 covariance;
+};
+
 using PointCloudXYZ = pcl::PointCloud<pcl::PointXYZ>;
 using PointCloudXYZPtr = PointCloudXYZ::Ptr;
 using PointCloudXYZConstPtr = PointCloudXYZ::ConstPtr;

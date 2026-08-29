@@ -96,7 +96,7 @@ glidar_slam:
     loop_input_queue_capacity: 5
     loop_output_queue_capacity: 8
     # minimum number of keyframes between query and candidate keyframes to be considered for loop closure
-    loop_minimum_key_separation: 40
+    loop_minimum_key_separation: 15
     # max heading difference between query and candidate keyframes to be considered for loop closure
     loop_maximum_yaw_difference: 1.0
     # A measure of how many standard deviations are allowed to be in between
@@ -105,6 +105,11 @@ glidar_slam:
     loop_mahalanobis_threshold: 2.0
     # minimum score for a loop closure proposal to be considered valid
     loop_minimum_score: 0.8
+
+    # Enables static-map localization after a map has been loaded. This can also be changed at
+    # runtime with `ros2 param set`; the set_localization_mode service remains available.
+    localization_mode: false
+    localization_minimum_score: 0.5
     
     #### Dynamically loaded scan matcher plugins
     csm_local_tracker:

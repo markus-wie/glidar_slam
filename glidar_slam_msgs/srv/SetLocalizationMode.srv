@@ -1,0 +1,7 @@
+bool enable
+geometry_msgs/Pose initial_map_pose
+bool use_current_pose
+---
+bool success
+string message
+bool localization_active
