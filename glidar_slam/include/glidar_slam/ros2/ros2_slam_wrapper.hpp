@@ -37,8 +37,6 @@ using glidar_slam::core::Parameters;
 using glidar_slam::core::PointCloudXYZ;
 using glidar_slam::core::SlamSystem;
 
-constexpr double kUnknownOdometryVariance = 1e6;
-
 class Ros2SlamWrapper : public rclcpp::Node
 {
 public:

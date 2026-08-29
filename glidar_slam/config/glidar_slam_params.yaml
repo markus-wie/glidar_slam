@@ -25,8 +25,12 @@ glidar_slam:
     # General Parameters
     minimum_travel_distance: 0.5
     minimum_travel_heading: 0.4
+    unobservable_variance: 10000.0
+    
+    # Visualize covariance ellipses for all keyframes instead of only the newest keyframe.
+    debug_visualize_covariances: false
     # Timing diagnostics for the SLAM pipeline and loop-closure worker.
-    debug_timings: true
+    debug_timings: false
 
     # Whether the lidar scan is voxelized before use.
     # Avoids overweighting dense points that are in close proximity to the sensor, and reduces the number of points used in scan matching.
@@ -39,7 +43,7 @@ glidar_slam:
     occ_map_padding: 2
 
     # Submap Parameters
-    submap_window_size: 5
+    submap_window_size: 10
 
     # Ground Observation Parameters
     ground_debug_enable: false
@@ -93,8 +97,6 @@ glidar_slam:
     loop_output_queue_capacity: 8
     # minimum number of keyframes between query and candidate keyframes to be considered for loop closure
     loop_minimum_key_separation: 40
-    # max euclidean distance between query and candidate keyframes to be considered for loop closure
-    loop_maximum_distance: 2.0
     # max heading difference between query and candidate keyframes to be considered for loop closure
     loop_maximum_yaw_difference: 1.0
     # A measure of how many standard deviations are allowed to be in between
@@ -103,23 +105,21 @@ glidar_slam:
     loop_mahalanobis_threshold: 2.0
     # minimum score for a loop closure proposal to be considered valid
     loop_minimum_score: 0.8
-    # maximum consistency 
-    loop_maximum_consistency_error: 0.5
     
     #### Dynamically loaded scan matcher plugins
     csm_local_tracker:
       plugin: glidar_slam/CorrelativeScanMatcherPlugin
-      csm_smear_deviation: 0.1
+      csm_smear_deviation: 0.15
       csm_use_laplace_kernel: true
       csm_use_distance_transform: false
       csm_use_tbb: true
-      csm_debug_enable: true
-      csm_stage_resolutions: [0.05, 0.05, 0.03]
+      csm_debug_enable: false
+      csm_stage_resolutions: [0.05, 0.04, 0.02]
       csm_stage_translation_steps: [0.1, 0.01, 0.001]
-      csm_stage_window_x: [1.0, 0.15, 0.015]
-      csm_stage_window_y: [1.0, 0.15, 0.015]
+      csm_stage_window_x: [2.0, 0.15, 0.015]
+      csm_stage_window_y: [2.0, 0.15, 0.015]
       csm_stage_angular_steps: [0.1, 0.01, 0.001]
-      csm_stage_window_yaw: [1.0, 0.15, 0.015]
+      csm_stage_window_yaw: [0.5, 0.15, 0.015]
 
     csm_ground_marking_detection:
       plugin: glidar_slam/CorrelativeScanMatcherPlugin
@@ -137,15 +137,15 @@ glidar_slam:
 
     csm_loop_closure_detection:
       plugin: glidar_slam/CorrelativeScanMatcherPlugin
-      csm_smear_deviation: 0.1
+      csm_smear_deviation: 0.15
       csm_use_laplace_kernel: true
       csm_use_distance_transform: false
       csm_use_tbb: true
-      csm_debug_enable: false
-      csm_stage_resolutions: [0.05, 0.05, 0.03]
+      csm_debug_enable: true
+      csm_stage_resolutions: [0.05, 0.04, 0.02]
       csm_stage_translation_steps: [0.1, 0.01, 0.001]
-      csm_stage_window_x: [4.0, 0.15, 0.015]
-      csm_stage_window_y: [4.0, 0.15, 0.015]
+      csm_stage_window_x: [3.0, 0.15, 0.015]
+      csm_stage_window_y: [3.0, 0.15, 0.015]
       csm_stage_angular_steps: [0.1, 0.01, 0.001]
       csm_stage_window_yaw: [0.8, 0.15, 0.015]
 

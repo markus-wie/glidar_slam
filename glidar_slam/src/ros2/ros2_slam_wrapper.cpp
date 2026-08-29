@@ -74,6 +74,10 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->declare_parameter<double>("minimum_travel_distance", 0.5);
   parameters_->minimum_travel_heading =
     this->declare_parameter<double>("minimum_travel_heading", 0.5);
+  parameters_->unobservable_variance =
+    this->declare_parameter<double>("unobservable_variance", 1e6);
+  parameters_->debug_visualize_covariances =
+    this->declare_parameter<bool>("debug_visualize_covariances", false);
 
   parameters_->lidar_voxelization_enable =
     this->declare_parameter<bool>("lidar_voxelization_enable", true);
@@ -186,15 +190,11 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     static_cast<std::size_t>(this->declare_parameter<int>("loop_output_queue_capacity", 8));
   parameters_->loop_minimum_key_separation =
     static_cast<uint64_t>(this->declare_parameter<int>("loop_minimum_key_separation", 20));
-  parameters_->loop_maximum_distance =
-    this->declare_parameter<double>("loop_maximum_distance", 2.0);
   parameters_->loop_maximum_yaw_difference =
     this->declare_parameter<double>("loop_maximum_yaw_difference", 1.0);
   parameters_->loop_mahalanobis_threshold =
     this->declare_parameter<double>("loop_mahalanobis_threshold", 3.0);
   parameters_->loop_minimum_score = this->declare_parameter<double>("loop_minimum_score", 0.5);
-  parameters_->loop_maximum_consistency_error =
-    this->declare_parameter<double>("loop_maximum_consistency_error", 0.5);
   parameters_->debug_timings = this->declare_parameter<bool>("debug_timings", false);
 
   scan_matcher_loader_ = std::make_unique<pluginlib::ClassLoader<ScanMatcherInterface>>(
@@ -312,6 +312,10 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.minimum_travel_distance = parameter.as_double();
     } else if (name == "minimum_travel_heading") {
       updated.minimum_travel_heading = parameter.as_double();
+    } else if (name == "unobservable_variance") {
+      updated.unobservable_variance = parameter.as_double();
+    } else if (name == "debug_visualize_covariances") {
+      updated.debug_visualize_covariances = parameter.as_bool();
     } else if (name == "lidar_voxelization_enable") {
       updated.lidar_voxelization_enable = parameter.as_bool();
     } else if (name == "lidar_voxelization_size") {
@@ -386,16 +390,12 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.loop_debug_enable = parameter.as_bool();
     } else if (name == "loop_minimum_key_separation") {
       updated.loop_minimum_key_separation = static_cast<uint64_t>(parameter.as_int());
-    } else if (name == "loop_maximum_distance") {
-      updated.loop_maximum_distance = parameter.as_double();
     } else if (name == "loop_maximum_yaw_difference") {
       updated.loop_maximum_yaw_difference = parameter.as_double();
     } else if (name == "loop_mahalanobis_threshold") {
       updated.loop_mahalanobis_threshold = parameter.as_double();
     } else if (name == "loop_minimum_score") {
       updated.loop_minimum_score = parameter.as_double();
-    } else if (name == "loop_maximum_consistency_error") {
-      updated.loop_maximum_consistency_error = parameter.as_double();
     } else if (name == "debug_timings") {
       updated.debug_timings = parameter.as_bool();
     }
@@ -580,8 +580,9 @@ void Ros2SlamWrapper::ScanRGBDCallback(
 
 void Ros2SlamWrapper::odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr & msg)
 {
-  auto sanitizeOdometryVariance = [](double variance) {
-    return std::isfinite(variance) && variance > 0.0 ? variance : kUnknownOdometryVariance;
+  auto sanitizeOdometryVariance = [this](double variance) {
+    return std::isfinite(variance) && variance > 0.0 ? variance
+                                                     : parameters_->unobservable_variance;
   };
 
   latest_odom_covariance_.setZero();
@@ -871,12 +872,22 @@ void Ros2SlamWrapper::publishGraph(
 {
   visualization_msgs::msg::MarkerArray marker_array_msg;
 
-  for (const auto & keyframe : keyframes) {
+  for (std::size_t index = 0; index < keyframes.size(); ++index) {
+    const auto & keyframe = keyframes[index];
     marker_array_msg.markers.push_back(keyframeToMarker(*keyframe, parameters_->map_frame));
-    if (
-      const auto covariance_marker =
-        keyframeCovarianceToMarker(*keyframe, parameters_->map_frame)) {
-      marker_array_msg.markers.push_back(*covariance_marker);
+    if (parameters_->debug_visualize_covariances || index + 1 == keyframes.size()) {
+      if (
+        const auto covariance_marker =
+          keyframeCovarianceToMarker(*keyframe, parameters_->map_frame)) {
+        marker_array_msg.markers.push_back(*covariance_marker);
+      }
+    } else {
+      visualization_msgs::msg::Marker delete_marker;
+      delete_marker.header.frame_id = parameters_->map_frame;
+      delete_marker.ns = "slam_graph_covariance";
+      delete_marker.id = keyframe->key;
+      delete_marker.action = visualization_msgs::msg::Marker::DELETE;
+      marker_array_msg.markers.push_back(delete_marker);
     }
   }
 

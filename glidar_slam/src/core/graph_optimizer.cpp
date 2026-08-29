@@ -14,22 +14,25 @@ namespace glidar_slam::core {
 
 namespace {
 
-gtsam::noiseModel::Gaussian::shared_ptr makeCovarianceNoiseModel(const gtsam::Matrix66 & covariance)
+gtsam::noiseModel::Gaussian::shared_ptr makeCovarianceNoiseModel(
+  const gtsam::Matrix66 & covariance, double unobservable_variance)
 {
   constexpr double minimum_variance = 1e-8;
-  constexpr double unknown_variance = 1e6;
 
   if (!covariance.allFinite()) {
-    return gtsam::noiseModel::Gaussian::Covariance(gtsam::Matrix66::Identity() * unknown_variance);
+    return gtsam::noiseModel::Gaussian::Covariance(
+      gtsam::Matrix66::Identity() * unobservable_variance);
   }
 
   gtsam::Matrix66 symmetric = 0.5 * (covariance + covariance.transpose());
   Eigen::SelfAdjointEigenSolver<gtsam::Matrix66> solver(symmetric);
   if (solver.info() != Eigen::Success || !solver.eigenvalues().allFinite()) {
-    return gtsam::noiseModel::Gaussian::Covariance(gtsam::Matrix66::Identity() * unknown_variance);
+    return gtsam::noiseModel::Gaussian::Covariance(
+      gtsam::Matrix66::Identity() * unobservable_variance);
   }
   if (solver.eigenvalues().minCoeff() < -minimum_variance) {
-    return gtsam::noiseModel::Gaussian::Covariance(gtsam::Matrix66::Identity() * unknown_variance);
+    return gtsam::noiseModel::Gaussian::Covariance(
+      gtsam::Matrix66::Identity() * unobservable_variance);
   }
 
   const gtsam::Matrix66 sanitized = solver.eigenvectors() *
@@ -75,7 +78,8 @@ uint64_t GraphOptimizer::addRelativeFactor(
   }
 
   pending_factors_.add(gtsam::BetweenFactor<gtsam::Pose3>(
-    from_key, to_key, relative_pose, makeCovarianceNoiseModel(covariance)));
+    from_key, to_key, relative_pose,
+    makeCovarianceNoiseModel(covariance, params_->unobservable_variance)));
   if (!pending_values_.exists(to_key) && !current_estimates_.exists(to_key)) {
     const gtsam::Pose3 from_pose = current_estimates_.exists(from_key)
                                      ? current_estimates_.at<gtsam::Pose3>(from_key)

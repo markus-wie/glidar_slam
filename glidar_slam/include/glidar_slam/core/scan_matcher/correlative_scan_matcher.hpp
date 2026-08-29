@@ -18,8 +18,6 @@
 
 namespace glidar_slam::core {
 
-constexpr double MAX_VARIANCE = 500.0;
-
 struct CsmResult
 {
   Pose2D optimized_pose;
@@ -89,13 +87,13 @@ private:
   void buildDistanceTransformField(
     LikelihoodField & field, const std::vector<Point2D> & points) const;
 
-  std::shared_ptr<const std::vector<LikelihoodField>> getLikelihoodFields(
+  std::shared_ptr<const std::vector<std::shared_ptr<LikelihoodField>>> getLikelihoodFields(
     const SubmapGrid & submap_grid, const std::vector<CsmSearchStage> & stages) const;
 
   static void selectBestPose(SearchResult & result);
 
-  static Eigen::Matrix3d computeCovariance(
-    const std::vector<SearchResult> & results, const std::vector<CsmSearchStage> & stages);
+  Eigen::Matrix3d computeCovariance(
+    const std::vector<SearchResult> & results, const std::vector<CsmSearchStage> & stages) const;
 
   std::shared_ptr<Parameters> params_;
 };

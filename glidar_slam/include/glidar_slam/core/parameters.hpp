@@ -39,6 +39,8 @@ struct Parameters
   // General Parameters
   double minimum_travel_distance{0.5};
   double minimum_travel_heading{0.5};
+  double unobservable_variance{1e6};
+  bool debug_visualize_covariances{false};
 
   bool lidar_voxelization_enable{true};
   double lidar_voxelization_size{0.2};
@@ -99,11 +101,9 @@ struct Parameters
   std::size_t loop_input_queue_capacity{2};
   std::size_t loop_output_queue_capacity{8};
   uint64_t loop_minimum_key_separation{20};
-  double loop_maximum_distance{2.0};
   double loop_maximum_yaw_difference{1.0};
   double loop_mahalanobis_threshold{3.0};
   double loop_minimum_score{0.5};
-  double loop_maximum_consistency_error{0.5};
   bool debug_timings{false};
 
   // iSAM2 Parameters
@@ -136,6 +136,9 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
   os << "],\n"
      << "  minimum_travel_distance: " << p.minimum_travel_distance << ",\n"
      << "  minimum_travel_heading: " << p.minimum_travel_heading << ",\n"
+     << "  unobservable_variance: " << p.unobservable_variance << ",\n"
+     << "  debug_visualize_covariances: " << (p.debug_visualize_covariances ? "true" : "false")
+     << ",\n"
      << "  lidar_voxelization_enable: " << (p.lidar_voxelization_enable ? "true" : "false") << ",\n"
      << "  lidar_voxelization_size: " << p.lidar_voxelization_size << ",\n"
      << "  occ_map_resolution: " << p.occ_map_resolution << ",\n"
@@ -191,11 +194,9 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  loop_input_queue_capacity: " << p.loop_input_queue_capacity << ",\n"
      << "  loop_output_queue_capacity: " << p.loop_output_queue_capacity << ",\n"
      << "  loop_minimum_key_separation: " << p.loop_minimum_key_separation << ",\n"
-     << "  loop_maximum_distance: " << p.loop_maximum_distance << ",\n"
      << "  loop_maximum_yaw_difference: " << p.loop_maximum_yaw_difference << ",\n"
      << "  loop_mahalanobis_threshold: " << p.loop_mahalanobis_threshold << ",\n"
      << "  loop_minimum_score: " << p.loop_minimum_score << ",\n"
-     << "  loop_maximum_consistency_error: " << p.loop_maximum_consistency_error << ",\n"
      << "  debug_timings: " << (p.debug_timings ? "true" : "false") << ",\n"
      << "  isam_relinearizeThreshold: " << p.isam_relinearizeThreshold << ",\n"
      << "  isam_relinearizeSkip: " << p.isam_relinearizeSkip << "\n"

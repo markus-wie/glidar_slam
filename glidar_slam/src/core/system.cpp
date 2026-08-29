@@ -17,8 +17,6 @@ namespace glidar_slam::core {
 
 namespace {
 
-constexpr double kUnobservablePlanarVariance = 1e6;
-
 double elapsedMilliseconds(const std::chrono::steady_clock::time_point & start)
 {
   return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
@@ -57,14 +55,15 @@ gtsam::Pose3 initialPoseFromGroundObservation(
     gtsam::Point3(0.0, 0.0, observation->distance_to_base));
 }
 
-gtsam::Matrix66 planarOdometryCovariance(const gtsam::Matrix66 & covariance)
+gtsam::Matrix66 planarOdometryCovariance(
+  const gtsam::Matrix66 & covariance, const Parameters & parameters)
 {
   gtsam::Matrix66 result = covariance;
   const std::array<int, 3> unobservable_dimensions{0, 1, 5};
   for (const int dimension : unobservable_dimensions) {
     result.row(dimension).setZero();
     result.col(dimension).setZero();
-    result(dimension, dimension) = kUnobservablePlanarVariance;
+    result(dimension, dimension) = parameters.unobservable_variance;
   }
   return result;
 }
@@ -98,19 +97,6 @@ double computeYawDistance(const gtsam::Pose3 & lhs, const gtsam::Pose3 & rhs)
   const double lhs_yaw = lhs.rotation().rpy().z();
   const double rhs_yaw = rhs.rotation().rpy().z();
   return std::abs(Utils::normalizeAngle(lhs_yaw - rhs_yaw));
-}
-
-std::vector<Point2D> transformScanPoints(const PointCloudXYZ & scan, const gtsam::Pose3 & pose)
-{
-  std::vector<Point2D> points;
-  points.reserve(scan.size());
-  for (const auto & point : scan) {
-    const gtsam::Point3 world_point = pose.transformFrom(gtsam::Point3(point.x, point.y, point.z));
-    if (std::isfinite(world_point.x()) && std::isfinite(world_point.y())) {
-      points.push_back({world_point.x(), world_point.y()});
-    }
-  }
-  return points;
 }
 
 pcl::PointCloud<pcl::PointXYZ>::Ptr voxelizeLidarScan(const LaserScan & scan, double voxel_size)
@@ -204,6 +190,8 @@ bool SlamSystem::process(
   double map_ms = 0;
   double submap_ms = 0;
   double update_covariance_ms = 0;
+  double update_poses_ms = 0;
+  double rebuild_submap_ms = 0;
   double loop_dispatch_ms = 0;
 
   // const std::shared_ptr<const LaserScan> & laser_scan = sensor_data.laserScan();
@@ -224,7 +212,7 @@ bool SlamSystem::process(
   }
 
   std::vector<Point2D> interpolated_points =
-    linearInterpolateScan(*sensor_data.laserScan(), parameters_->lidar_voxelization_size);
+    linearInterpolateScan(*laser_scan, parameters_->lidar_voxelization_size);
   laser_scan = std::make_shared<LaserScan>(std::move(interpolated_points));
 
   if (parameters_->debug_timings) {
@@ -261,7 +249,8 @@ bool SlamSystem::process(
     auto local_map =
       MapBuilder::buildLocalOccupancy(laser_scan->points(), parameters_->occ_map_resolution);
 
-    std::vector<Point2D> initial_points = transformScanPoints(laser_scan->points(), initial_pose);
+    std::vector<Point2D> initial_points =
+      Utils::transformScanPoints(laser_scan->points2D(), initial_pose);
     submap_grid_->add(initial_points, new_keyframe->key);
 
     if (ground_observation) {
@@ -346,7 +335,7 @@ bool SlamSystem::process(
   gtsam::Matrix66 csm_covariance = gtsam::Matrix66::Zero();
 
   // Inflate unobservable dimensions
-  constexpr double INF_VAR = 1e6;
+  const double INF_VAR = parameters_->unobservable_variance;
 
   // Diagonal of csm_result.covariance:
   // [ x-x, y-y, yaw-yaw ]
@@ -392,7 +381,7 @@ bool SlamSystem::process(
   // Add Odometry Factor
   graph_optimizer_->addRelativeFactor(
     reference_keyframe->key, next_keyframe_key, raw_odom_delta,
-    planarOdometryCovariance(odom_covariance));
+    planarOdometryCovariance(odom_covariance, *parameters_));
 
   // Add LiDAR Scan Matching Factor
   graph_optimizer_->addRelativeFactor(
@@ -529,7 +518,8 @@ bool SlamSystem::process(
 
   const auto submap_start = std::chrono::steady_clock::now();
 
-  std::vector<Point2D> newest_points = transformScanPoints(laser_scan->points(), optimized_pose);
+  std::vector<Point2D> newest_points =
+    Utils::transformScanPoints(laser_scan->points2D(), optimized_pose);
   submap_grid_->add(newest_points, next_keyframe_key);
   while (submap_grid_->size() > static_cast<std::size_t>(parameters_->submap_window_size)) {
     submap_grid_->removeOldestKeyframe();
@@ -542,6 +532,9 @@ bool SlamSystem::process(
   const auto update_covariance_start = std::chrono::steady_clock::now();
 
   std::unordered_map<uint64_t, gtsam::Matrix66> optimized_covariances;
+  // TODO: This can get really costly.. Should at least be in some background thread
+  // The reason we need is for the loop closure proximity checker to correctly calculate the
+  // Mahalanobis distance between two keyframes.
   if (loop_closure_optimization_pending_) {
     for (const auto & keyframe : map_database_->getAllKeyFrames()) {
       if (const auto covariance = graph_optimizer_->getMarginalCovariance(keyframe->key)) {
@@ -550,9 +543,21 @@ bool SlamSystem::process(
     }
   }
 
+  if (parameters_->debug_timings) {
+    update_covariance_ms = elapsedMilliseconds(update_covariance_start);
+  }
+
+  const auto update_poses_start = std::chrono::steady_clock::now();
+
   for (const auto & snapshot : map_database_->updatePoses(updated_states, optimized_covariances)) {
     map_builder_->submit(snapshot);
   }
+
+  if (parameters_->debug_timings) {
+    update_poses_ms = elapsedMilliseconds(update_poses_start);
+  }
+
+  const auto rebuild_submap_start = std::chrono::steady_clock::now();
 
   if (loop_closure_optimization_pending_) {
     map_builder_->rebuild(map_database_->getSnapshots());
@@ -560,14 +565,14 @@ bool SlamSystem::process(
   }
   loop_closure_optimization_pending_ = false;
 
+  if (parameters_->debug_timings) {
+    rebuild_submap_ms = elapsedMilliseconds(rebuild_submap_start);
+  }
+
   {
     std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
     gtsam::Pose3 odom_to_base = latest_odom_pose.inverse();
     latest_map_to_odom_ = optimized_pose.compose(odom_to_base);
-  }
-
-  if (parameters_->debug_timings) {
-    update_covariance_ms = elapsedMilliseconds(update_covariance_start);
   }
 
   const auto loop_dispatch_start = std::chrono::steady_clock::now();
@@ -588,11 +593,13 @@ bool SlamSystem::process(
       "SLAM SYSTEM timings [ms]: lidar_voxelization={}, loop_proposals={}, initialization={}, "
       "ground_extraction={}, "
       "csm={}, factor_preparation={}, "
-      "optimization={}, keyframe={}, map={}, submap={}, update_covariance={}, loop_dispatch={}, "
+      "optimization={}, keyframe={}, map={}, submap={}, update_covariance={}, update_poses={}, "
+      "rebuild_submap={}, "
+      "loop_dispatch={}, "
       "total={}",
       lidar_voxelization_ms, loop_proposals_ms, initialization_ms, ground_extraction_ms, csm_ms,
       factor_preparation_ms, optimization_ms, keyframe_ms, map_ms, submap_ms, update_covariance_ms,
-      loop_dispatch_ms, elapsedMilliseconds(process_start));
+      update_poses_ms, rebuild_submap_ms, loop_dispatch_ms, elapsedMilliseconds(process_start));
   }
 
   return true;
@@ -665,11 +672,19 @@ bool SlamSystem::processLoopClosureProposals()
 
 void SlamSystem::rebuildSubmap()
 {
+  auto start_time = std::chrono::steady_clock::now();
+
   std::vector<double> resolutions;
   resolutions = scan_matcher_->fieldResolutions();
 
+  auto fieldResolutions_time = std::chrono::steady_clock::now();
+
   auto rebuilt_submap = std::make_unique<SubmapGrid>(resolutions);
+
   const auto keyframes = map_database_->getAllKeyFrames();
+
+  auto getkeyframes_time = std::chrono::steady_clock::now();
+
   const std::size_t window_size =
     static_cast<std::size_t>(std::max(parameters_->submap_window_size, 0));
   const std::size_t first_keyframe =
@@ -678,9 +693,23 @@ void SlamSystem::rebuildSubmap()
   for (std::size_t index = first_keyframe; index < keyframes.size(); ++index) {
     const auto & keyframe = keyframes[index];
     const std::vector<Point2D> points =
-      transformScanPoints(keyframe->scan->points(), keyframe->pose);
+      Utils::transformScanPoints(keyframe->scan->points2D(), keyframe->pose);
     rebuilt_submap->add(points, keyframe->key);
   }
+
+  const auto end_time = std::chrono::steady_clock::now();
+
+  auto field_resolution_duration =
+    std::chrono::duration<double, std::milli>(fieldResolutions_time - start_time).count();
+  auto get_keyframes_duration =
+    std::chrono::duration<double, std::milli>(getkeyframes_time - fieldResolutions_time).count();
+  auto rebuild_duration =
+    std::chrono::duration<double, std::milli>(end_time - getkeyframes_time).count();
+
+  SAM_INFO(
+    "Rebuilt submap in {} ms (fieldResolutions: {} ms, getKeyFrames: {} ms, rebuild: {} ms)",
+    field_resolution_duration + get_keyframes_duration + rebuild_duration,
+    field_resolution_duration, get_keyframes_duration, rebuild_duration);
 
   submap_grid_ = std::move(rebuilt_submap);
 }

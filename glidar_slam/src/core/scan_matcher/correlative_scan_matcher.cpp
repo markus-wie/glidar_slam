@@ -40,7 +40,6 @@ double evaluatePoseScore(
   const double c = std::cos(pose.yaw);
   const double s = std::sin(pose.yaw);
 
-  int valid_points = 0;
   for (const auto & point : points) {
     const double eval_score =
       field.getScore(pose.x + c * point.x - s * point.y, pose.y + s * point.x + c * point.y);
@@ -48,11 +47,6 @@ double evaluatePoseScore(
       continue;
     }
     score += eval_score;
-    ++valid_points;
-  }
-
-  if (valid_points == 0) {
-    return -1.0;
   }
 
   return score / static_cast<double>(points.size());
@@ -112,13 +106,13 @@ CsmResult CorrelativeScanMatcher::match(
   const std::vector<CsmSearchStage> & stages = params_->csm_search_stages;
 
   if (stages.empty() || current_points.empty()) {
-    result.covariance(0, 0) = MAX_VARIANCE;
-    result.covariance(1, 1) = MAX_VARIANCE;
-    result.covariance(2, 2) = MAX_VARIANCE;
+    result.covariance(0, 0) = params_->unobservable_variance;
+    result.covariance(1, 1) = params_->unobservable_variance;
+    result.covariance(2, 2) = params_->unobservable_variance;
     return result;
   }
 
-  const std::shared_ptr<const std::vector<LikelihoodField>> fields =
+  const std::shared_ptr<const std::vector<std::shared_ptr<LikelihoodField>>> fields =
     getLikelihoodFields(submap_grid, stages);
 
   if (params_->debug_timings) {
@@ -129,7 +123,7 @@ CsmResult CorrelativeScanMatcher::match(
   }
 
   const auto initial_score_start = std::chrono::steady_clock::now();
-  const double initial_score = evaluatePoseScore(current_points, fields->front(), pose_estimate);
+  const double initial_score = evaluatePoseScore(current_points, *fields->front(), pose_estimate);
   Pose2D best_pose = pose_estimate;
   if (params_->debug_timings) {
     const double elapsed_ms = std::chrono::duration<double, std::milli>(
@@ -152,7 +146,8 @@ CsmResult CorrelativeScanMatcher::match(
 
     const auto stage_start = std::chrono::steady_clock::now();
     SearchResult stage_result =
-      searchSpace(current_points, fields->at(stage_index), best_pose, stage);
+      searchSpace(current_points, *fields->at(stage_index), best_pose, stage);
+
     if (params_->debug_timings) {
       const double elapsed_ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - stage_start)
@@ -167,40 +162,32 @@ CsmResult CorrelativeScanMatcher::match(
     if (params_->csm_debug_enable) {
       SAM_INFO(
         "CSM stage {}: center=({}, {}, {}), result=({}, {}, {}), score={}, candidates={}, "
-        "steps=({}, {}, {}), windows=({}, {}, {})",
+        "delta_x={}, delta_y={}, delta_yaw={}",
         stage_index, stage_result.center.x, stage_result.center.y, stage_result.center.yaw,
         stage_result.best_pose.x, stage_result.best_pose.y, stage_result.best_pose.yaw,
-        stage_result.best_score, stage_result.candidate_count, stage.translation_step,
-        stage.translation_step, stage.angular_step, stage.window_x, stage.window_y,
-        stage.window_yaw);
+        stage_result.best_score, stage_result.candidate_count, best_pose.x - pose_estimate.x,
+        best_pose.y - pose_estimate.y, Utils::normalizeAngle(best_pose.yaw - pose_estimate.yaw));
     }
   }
 
-  const auto covariance_start = std::chrono::steady_clock::now();
   Eigen::Matrix3d cov = computeCovariance(results, stages);
-  if (params_->debug_timings) {
-    const double elapsed_ms =
-      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - covariance_start)
-        .count();
-    SAM_INFO("CSM timing: covariance={} ms", elapsed_ms);
-  }
 
   if (params_->csm_debug_enable) {
     SAM_INFO(
-      "CSM final pose: x={}, y={}, yaw={}, score={}, delta_x={}, delta_y={}, delta_yaw={}",
-      best_pose.x, best_pose.y, best_pose.yaw, results.back().best_score,
-      best_pose.x - pose_estimate.x, best_pose.y - pose_estimate.y,
-      Utils::normalizeAngle(best_pose.yaw - pose_estimate.yaw));
+      "CSM covariance (of best result): x={}, y={}, yaw={}", cov(0, 0), cov(1, 1), cov(2, 2));
   }
 
   result.optimized_pose = best_pose;
   result.score = results.back().best_score;
   result.covariance = cov;
+
   const auto debug_image_start = std::chrono::steady_clock::now();
+
   if (params_->csm_debug_enable) {
-    result.low_res_debug = CsmResult::toDebugImage(fields->front());
-    result.high_res_debug = CsmResult::toDebugImage(fields->back());
+    result.low_res_debug = CsmResult::toDebugImage(*fields->front());
+    result.high_res_debug = CsmResult::toDebugImage(*fields->back());
   }
+
   if (params_->debug_timings) {
     const double image_elapsed_ms = std::chrono::duration<double, std::milli>(
                                       std::chrono::steady_clock::now() - debug_image_start)
@@ -210,13 +197,15 @@ CsmResult CorrelativeScanMatcher::match(
         .count();
     SAM_INFO("CSM timing: debug images={} ms, total={} ms", image_elapsed_ms, total_elapsed_ms);
   }
+
   return result;
 }
 
-std::shared_ptr<const std::vector<LikelihoodField>> CorrelativeScanMatcher::getLikelihoodFields(
+std::shared_ptr<const std::vector<std::shared_ptr<LikelihoodField>>>
+CorrelativeScanMatcher::getLikelihoodFields(
   const SubmapGrid & submap_grid, const std::vector<CsmSearchStage> & stages) const
 {
-  auto fields = std::make_shared<std::vector<LikelihoodField>>();
+  auto fields = std::make_shared<std::vector<std::shared_ptr<LikelihoodField>>>();
   fields->reserve(stages.size());
   for (const auto & stage : stages) {
     fields->push_back(submap_grid.getLikelihoodField(
@@ -282,7 +271,7 @@ void CorrelativeScanMatcher::evaluateYawSlice(
   const int field_width = field.width;
   const int max_x = field.max_x_index;
   const int max_y = field.max_y_index;
-  const float * __restrict field_ptr = field.data.data();
+  const float * field_ptr = field.data.data();
 
   const std::size_t yaw_offset = yaw_index * grid.candidates_per_yaw;
   const std::size_t y_size = grid.y_positions.size();
@@ -294,7 +283,6 @@ void CorrelativeScanMatcher::evaluateYawSlice(
       const double candidate_y = grid.y_positions[y_index];
 
       double total_score = 0.0;
-      int valid_points = 0;
 
       for (const auto & point : rotated_points) {
         const double map_x = candidate_x + point.x;
@@ -320,14 +308,10 @@ void CorrelativeScanMatcher::evaluateYawSlice(
 
           total_score += (1.0 - dx) * (1.0 - dy) * s00 + dx * (1.0 - dy) * s10 +
                          (1.0 - dx) * dy * s01 + dx * dy * s11;
-          ++valid_points;
         }
       }
 
-      double final_score = -1.0;
-      if (valid_points >= static_cast<int>(points.size() * 0.3)) {
-        final_score = total_score / static_cast<double>(points.size());
-      }
+      double final_score = total_score / static_cast<double>(points.size());
 
       const std::size_t response_index = yaw_offset + x_index * y_size + y_index;
       result.responses[response_index] = {{candidate_x, candidate_y, yaw}, final_score};
@@ -368,122 +352,125 @@ void CorrelativeScanMatcher::selectBestPose(SearchResult & result)
 }
 
 Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
-  const std::vector<SearchResult> & results, const std::vector<CsmSearchStage> & stages)
+  const std::vector<SearchResult> & results, const std::vector<CsmSearchStage> & stages) const
 {
   Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
 
   if (results.empty() || stages.empty() || results.size() != stages.size()) {
-    covariance(0, 0) = MAX_VARIANCE;
-    covariance(1, 1) = MAX_VARIANCE;
-    covariance(2, 2) = MAX_VARIANCE;
+    covariance.diagonal().setConstant(params_->unobservable_variance);
     return covariance;
   }
 
-  // use the coarsest stage for x/y translation variance
-  const auto & coarse_result = results.front();
-  const auto & coarse_stage = stages.front();
+  // Lambda to compute the 2x2 spatial covariance for a single stage
+  auto computeStageCovXY =
+    [&](const SearchResult & result, const CsmSearchStage & stage) -> Eigen::Matrix2d {
+    using Cell = std::pair<int, int>;
+    std::map<Cell, std::pair<double, double>> cell_positions;
+    std::map<Cell, double> cell_responses;
 
-  // use the finest stage for yaw rotational variance
-  const auto & fine_result = results.back();
-  const auto & fine_stage = stages.back();
+    const double threshold = result.best_score - 0.1;
+    for (const auto & response : result.responses) {
+      if (response.score < threshold) {
+        continue;
+      }
 
-  covariance(2, 2) = 4.0 * fine_stage.angular_step * fine_stage.angular_step;
+      const Cell cell{
+        static_cast<int>(std::lround((response.pose.x - result.center.x) / stage.translation_step)),
+        static_cast<int>(
+          std::lround((response.pose.y - result.center.y) / stage.translation_step))};
 
-  if (
-    coarse_result.responses.empty() || !std::isfinite(coarse_result.best_score) ||
-    coarse_result.best_score <= 1e-9) {
-    covariance(0, 0) = MAX_VARIANCE;
-    covariance(1, 1) = MAX_VARIANCE;
-    covariance(2, 2) = 1000.0 * fine_stage.angular_step * fine_stage.angular_step;
-    return covariance;
-  }
-
-  using Cell = std::pair<int, int>;
-  std::map<Cell, std::pair<double, double>> cell_positions;
-  std::map<Cell, double> cell_responses;
-  const double response_threshold = coarse_result.best_score - 0.1;
-  for (const auto & response : coarse_result.responses) {
-    if (response.score < response_threshold) {
-      continue;
-    }
-    const Cell cell{
-      static_cast<int>(
-        std::lround((response.pose.x - coarse_result.center.x) / coarse_stage.translation_step)),
-      static_cast<int>(
-        std::lround((response.pose.y - coarse_result.center.y) / coarse_stage.translation_step))};
-    const auto existing_response = cell_responses.find(cell);
-    if (existing_response == cell_responses.end() || response.score > existing_response->second) {
-      cell_responses[cell] = response.score;
-      cell_positions[cell] = {response.pose.x, response.pose.y};
-    }
-  }
-
-  double norm = 0.0;
-  double variance_xx = 0.0;
-  double variance_xy = 0.0;
-  double variance_yy = 0.0;
-
-  // Scaling factor to convert [0, 1] scores into sharp probability weights.
-  constexpr double sharpness = 50.0;
-
-  for (const auto & [cell, response_score] : cell_responses) {
-    const auto position = cell_positions[cell];
-    const double dx = position.first - coarse_result.best_pose.x;
-    const double dy = position.second - coarse_result.best_pose.y;
-
-    // Softmax-style weighting
-    const double weight = std::exp(sharpness * (response_score - coarse_result.best_score));
-
-    norm += weight;
-    variance_xx += dx * dx * weight;
-    variance_xy += dx * dy * weight;
-    variance_yy += dy * dy * weight;
-  }
-
-  if (norm > 1e-9 && std::isfinite(norm)) {
-    const double multiplier = 1.0 / std::max(coarse_result.best_score, 1e-9);
-
-    Eigen::Matrix2d cov_xy;
-    // Calculate raw sample variance in meters squared (removed the old multiplier hack)
-    cov_xy(0, 0) = std::max(
-      variance_xx / norm * multiplier,
-      0.1 * coarse_stage.translation_step * coarse_stage.translation_step);
-    cov_xy(0, 1) = cov_xy(1, 0) = variance_xy / norm * multiplier;
-    cov_xy(1, 1) = std::max(
-      variance_yy / norm * multiplier,
-      0.1 * coarse_stage.translation_step * coarse_stage.translation_step);
-
-    // Eigendecomposition to identify flat ridges (unobservable directions)
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> solver(cov_xy);
-    Eigen::Vector2d eigenvalues = solver.eigenvalues();
-    Eigen::Matrix2d eigenvectors = solver.eigenvectors();
-
-    // Theoretical maximum variance for a uniform distribution on window [-W, W] is W^2 / 3
-    // Using window_x (or average search window) as bounding box reference
-    const double max_search_variance = (coarse_stage.window_x * coarse_stage.window_x) / 12.0;
-    const double saturation_threshold = 0.8 * max_search_variance;
-
-    for (int i = 0; i < 2; ++i) {
-      if (eigenvalues(i) > saturation_threshold) {
-        eigenvalues(i) = MAX_VARIANCE;  // Inflate only the unconstrained principal axis
+      const auto existing = cell_responses.find(cell);
+      if (existing == cell_responses.end() || response.score > existing->second) {
+        cell_responses[cell] = response.score;
+        cell_positions[cell] = {response.pose.x, response.pose.y};
       }
     }
 
-    // Reconstruct the covariance matrix
-    cov_xy = eigenvectors * eigenvalues.asDiagonal() * eigenvectors.transpose();
+    double norm = 0.0;
+    double var_xx = 0.0;
+    double var_yy = 0.0;
+    double var_xy = 0.0;
+    constexpr double sharpness = 50.0;
 
-    covariance(0, 0) = cov_xy(0, 0);
-    covariance(0, 1) = covariance(1, 0) = cov_xy(0, 1);
-    covariance(1, 1) = cov_xy(1, 1);
-  } else {
-    covariance(0, 0) = MAX_VARIANCE;
-    covariance(1, 1) = MAX_VARIANCE;
+    for (const auto & [cell, score] : cell_responses) {
+      const double dx = cell_positions[cell].first - result.best_pose.x;
+      const double dy = cell_positions[cell].second - result.best_pose.y;
+      const double weight = std::exp(sharpness * (score - result.best_score));
+
+      norm += weight;
+      var_xx += dx * dx * weight;
+      var_yy += dy * dy * weight;
+      var_xy += dx * dy * weight;
+    }
+
+    Eigen::Matrix2d cov = Eigen::Matrix2d::Zero();
+    if (norm > 1e-9 && std::isfinite(norm)) {
+      const double multiplier = 1.0 / std::max(result.best_score, 1e-9);
+      cov(0, 0) =
+        std::max(var_xx / norm * multiplier, 0.1 * stage.translation_step * stage.translation_step);
+      cov(1, 1) =
+        std::max(var_yy / norm * multiplier, 0.1 * stage.translation_step * stage.translation_step);
+      cov(0, 1) = cov(1, 0) = var_xy / norm * multiplier;
+    } else {
+      cov(0, 0) = cov(1, 1) = params_->unobservable_variance;
+    }
+    return cov;
+  };
+
+  // Compute covariances for all stages independently
+  std::vector<Eigen::Matrix2d> stage_covs;
+  stage_covs.reserve(stages.size());
+  for (size_t i = 0; i < stages.size(); ++i) {
+    if (
+      results[i].responses.empty() || !std::isfinite(results[i].best_score) ||
+      results[i].best_score <= 1e-9) {
+      stage_covs.push_back(Eigen::Matrix2d::Identity() * params_->unobservable_variance);
+    } else {
+      stage_covs.push_back(computeStageCovXY(results[i], stages[i]));
+    }
   }
 
+  // Extract macro-orientation from the coarsest stage
+  // Eigen always sorts eigenvalues ascending: (0) is minor axis, (1) is major axis
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> macro_solver(stage_covs.front());
+  Eigen::Matrix2d true_eigenvectors = macro_solver.eigenvectors();
+
+  // Project all stages into the true macro frame to find optimal bounds
+  double minor_variance = std::numeric_limits<double>::max();
+  double major_variance = 0.0;
+
+  for (const auto & cov : stage_covs) {
+    Eigen::Matrix2d projected = true_eigenvectors.transpose() * cov * true_eigenvectors;
+
+    // Fine stage provides precision (takes the minimum)
+    minor_variance = std::min(minor_variance, projected(0, 0));
+    // Coarse stage provides extent (takes the maximum)
+    major_variance = std::max(major_variance, projected(1, 1));
+  }
+
+  // Apply unobservable inflation based purely on the coarse window capacity
+  constexpr double threshold_strictness = 0.5;
+  const double saturation_threshold =
+    threshold_strictness * (stages.front().window_x * stages.front().window_x) / 12.0;
+  if (major_variance > saturation_threshold) {
+    major_variance = params_->unobservable_variance;
+  }
+
+  // Reconstruct the X/Y Covariance
+  Eigen::Matrix2d final_cov_xy = true_eigenvectors *
+                                 Eigen::Vector2d(minor_variance, major_variance).asDiagonal() *
+                                 true_eigenvectors.transpose();
+
+  covariance.topLeftCorner<2, 2>() = final_cov_xy;
+
+  // Calculate Yaw Covariance (Retained from the fine stage)
+  const auto & fine_result = results.back();
+  const auto & fine_stage = stages.back();
   const double fine_threshold = fine_result.best_score - 0.1;
   double angular_norm = 0.0;
   double angular_variance = 0.0;
   const double cell_tolerance = 0.5 * fine_stage.translation_step + 1e-9;
+
   for (const auto & response : fine_result.responses) {
     if (
       response.score < fine_threshold ||
@@ -497,9 +484,8 @@ Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
   }
 
   if (angular_norm > 1e-9 && std::isfinite(angular_norm)) {
-    covariance(2, 2) = angular_variance / angular_norm;
     covariance(2, 2) =
-      std::max(covariance(2, 2), fine_stage.angular_step * fine_stage.angular_step);
+      std::max(angular_variance / angular_norm, fine_stage.angular_step * fine_stage.angular_step);
   } else {
     covariance(2, 2) = 1000.0 * fine_stage.angular_step * fine_stage.angular_step;
   }
