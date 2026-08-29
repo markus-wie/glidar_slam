@@ -31,4 +31,9 @@ PointCloudXYZPtr voxelize(const PointCloudXYZConstPtr & pcl, double voxel_size);
 float probFromLogOdds(float log_odds);
 float logOddsFromProb(float prob);
 
+std::vector<Point2D> voxelize(const std::vector<Point2D> & input, double voxel_size);
+
+std::vector<Point2D> densify(
+  const std::vector<Point2D> & input, double target_spacing, double max_gap);
+
 }  // namespace glidar_slam::utils

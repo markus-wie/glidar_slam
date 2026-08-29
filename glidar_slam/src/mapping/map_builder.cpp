@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "glidar_slam/logger/logger.hpp"
 #include "glidar_slam/utils.hpp"
 
 namespace glidar_slam::mapping {
@@ -92,6 +93,8 @@ std::shared_ptr<const GlobalMapSnapshot> MapBuilder::getLatest() const
 void MapBuilder::run()
 {
   while (true) {
+    const auto process_start_time = std::chrono::steady_clock::now();
+
     std::shared_ptr<const KeyFrame> keyframe;
     std::vector<std::shared_ptr<const KeyFrame>> rebuild;
     {
@@ -114,6 +117,9 @@ void MapBuilder::run()
         pending_.erase(item);
       }
     }
+
+    const auto prepare_end_time = std::chrono::steady_clock::now();
+
     if (!rebuild.empty()) {
       clearAccumulatedMap();
       for (const auto & item : rebuild) {
@@ -124,7 +130,28 @@ void MapBuilder::run()
     } else if (keyframe) {
       apply(*keyframe);
     }
+
+    const auto apply_end_time = std::chrono::steady_clock::now();
+
     publish();
+
+    const auto publish_end_time = std::chrono::steady_clock::now();
+
+    if (parameters_->debug_timings) {
+      const double process_duration =
+        std::chrono::duration<double, std::milli>(publish_end_time - process_start_time).count();
+      const auto prepare_duration =
+        std::chrono::duration<double, std::milli>(prepare_end_time - process_start_time).count();
+      const auto apply_duration =
+        std::chrono::duration<double, std::milli>(apply_end_time - prepare_end_time).count();
+      const auto publish_duration =
+        std::chrono::duration<double, std::milli>(publish_end_time - apply_end_time).count();
+
+      SAM_INFO(
+        "[Map Builder] Prepare(Wait) Duration: {} ms, Apply Duration: {} ms, "
+        "Publish Duration: {} ms, Total Duration: {} ms",
+        prepare_duration, apply_duration, publish_duration, process_duration);
+    }
   }
 }
 

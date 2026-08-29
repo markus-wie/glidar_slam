@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <execution>
+#include <fstream>
 #include <limits>
 #include <numeric>
 #include <vector>
@@ -390,11 +391,18 @@ Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
     double var_xx = 0.0;
     double var_yy = 0.0;
     double var_xy = 0.0;
-    constexpr double sharpness = 50.0;
+    constexpr double sharpness = 20.0;
 
     for (const auto & [cell, score] : cell_responses) {
       const double dx = cell_positions[cell].first - result.best_pose.x;
       const double dy = cell_positions[cell].second - result.best_pose.y;
+
+      // Basically, the score represents a fitness measure, rather than a joint probability of how
+      // the points fit the likelihood field. If it were a true joint probability distribution, we
+      // could take the score as the weight directly, but it is an arithmetic mean of individual
+      // point likelihoods, so we can't directly incorporate it into a variance formulation.
+      // An approximation can be achieved using a Boltzmann-like weighting scheme. (score is the
+      // energy function, sharpness the inverse temperature)
       const double weight = std::exp(sharpness * (score - result.best_score));
 
       norm += weight;
@@ -430,36 +438,23 @@ Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
     }
   }
 
-  // Extract macro-orientation from the coarsest stage
-  // Eigen always sorts eigenvalues ascending: (0) is minor axis, (1) is major axis
+  // Start with the precision of the finest stage
+  Eigen::Matrix2d final_cov_xy = stage_covs.back();
+
+  // Evaluate the coarse stage for unobservability thresholding
   Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> macro_solver(stage_covs.front());
-  Eigen::Matrix2d true_eigenvectors = macro_solver.eigenvectors();
 
-  // Project all stages into the true macro frame to find optimal bounds
-  double minor_variance = std::numeric_limits<double>::max();
-  double major_variance = 0.0;
-
-  for (const auto & cov : stage_covs) {
-    Eigen::Matrix2d projected = true_eigenvectors.transpose() * cov * true_eigenvectors;
-
-    // Fine stage provides precision (takes the minimum)
-    minor_variance = std::min(minor_variance, projected(0, 0));
-    // Coarse stage provides extent (takes the maximum)
-    major_variance = std::max(major_variance, projected(1, 1));
-  }
-
-  // Apply unobservable inflation based purely on the coarse window capacity
   constexpr double threshold_strictness = 0.5;
   const double saturation_threshold =
     threshold_strictness * (stages.front().window_x * stages.front().window_x) / 12.0;
-  if (major_variance > saturation_threshold) {
-    major_variance = params_->unobservable_variance;
-  }
 
-  // Reconstruct the X/Y Covariance
-  Eigen::Matrix2d final_cov_xy = true_eigenvectors *
-                                 Eigen::Vector2d(minor_variance, major_variance).asDiagonal() *
-                                 true_eigenvectors.transpose();
+  for (int i = 0; i < 2; ++i) {
+    if (macro_solver.eigenvalues()(i) > saturation_threshold) {
+      // Inflate only along the direction that exceeded the threshold
+      Eigen::Vector2d dir = macro_solver.eigenvectors().col(i);
+      final_cov_xy += dir * dir.transpose() * params_->unobservable_variance;
+    }
+  }
 
   covariance.topLeftCorner<2, 2>() = final_cov_xy;
 
@@ -491,6 +486,7 @@ Eigen::Matrix3d CorrelativeScanMatcher::computeCovariance(
   }
 
   covariance = 0.5 * (covariance + covariance.transpose());
+
   return covariance;
 }
 

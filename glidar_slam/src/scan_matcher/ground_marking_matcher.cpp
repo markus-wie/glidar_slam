@@ -5,6 +5,10 @@
 
 #include "glidar_slam/logger/logger.hpp"
 #include "glidar_slam/scan_matcher/correlative_scan_matcher.hpp"
+#include "glidar_slam/utils.hpp"
+#include "pcl/filters/voxel_grid.h"
+#include "pcl/point_cloud.h"
+#include "pcl/point_types.h"
 
 namespace glidar_slam {
 
@@ -137,11 +141,38 @@ std::optional<CsmResult> GroundMarkingMatcher::match(
   const std::vector<Point2D> filtered_current_points =
     filterCurrentPoints(reference_points, current_points, relative_pose);
 
+  const std::vector<Point2D> voxelized_current_points =
+    utils::voxelize(filtered_current_points, 0.1);
+  const std::vector<Point2D> densified_current_points =
+    utils::densify(voxelized_current_points, 0.05, 0.2);
+
+  const std::vector<Point2D> voxelized_reference_points = utils::voxelize(reference_points, 0.1);
+  const std::vector<Point2D> densified_reference_points =
+    utils::densify(voxelized_reference_points, 0.05, 0.2);
+
   std::vector<double> resolutions;
   resolutions = scan_matcher_->fieldResolutions();
   SubmapGrid submap_grid(resolutions);
-  submap_grid.add(reference_points, 0);
-  return scan_matcher_->match(submap_grid, filtered_current_points, relative_pose);
+  submap_grid.add(densified_reference_points, 0);
+  return scan_matcher_->match(submap_grid, densified_current_points, relative_pose);
+}
+
+std::optional<CsmResult> GroundMarkingMatcher::match(
+  const SubmapGrid & submap, const GroundPlaneObservation & current_observation,
+  const Pose2D & pose_estimate) const
+{
+  std::vector<Point2D> current_points = extractMarkingPoints(current_observation.ground_cloud);
+
+  const std::vector<Point2D> voxelized_current_points = utils::voxelize(current_points, 0.1);
+  const std::vector<Point2D> densified_current_points =
+    utils::densify(voxelized_current_points, 0.05, 0.2);
+
+  return scan_matcher_->match(submap, densified_current_points, pose_estimate);
+}
+
+std::vector<double> GroundMarkingMatcher::fieldResolutions() const
+{
+  return scan_matcher_->fieldResolutions();
 }
 
 std::vector<Point2D> GroundMarkingMatcher::filterCurrentPoints(

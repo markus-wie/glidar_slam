@@ -123,9 +123,11 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
 
     past_keyframes.insert(past_keyframes.end(), future_keyframes.begin(), future_keyframes.end());
 
-    SAM_INFO(
-      "Loop closure submap window: candidate={}, window_size={}, actual_size={}", candidate->key,
-      requested_window_size, past_keyframes.size());
+    if (parameters_->loop_debug_enable) {
+      SAM_INFO(
+        "Loop closure submap window: candidate={}, window_size={}, actual_size={}", candidate->key,
+        requested_window_size, past_keyframes.size());
+    }
 
     for (const auto & neighbor : past_keyframes) {
       std::vector<Point2D> points;

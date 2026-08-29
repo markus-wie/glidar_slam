@@ -34,9 +34,9 @@ glidar_slam:
     # Startup Parameters
     startup:
       mode: "mapping" # "mapping" or "localization"
-      map_load_path: "/workspaces/ros2/glidar_slam_state.bin"
+      map_load_path: ""
       initial_pose:
-        use_provided: false
+        use_provided: true
         pose: [0.0, 0.0, 0.0] # [x, y, yaw]
 
     # Localization Parameters
@@ -58,12 +58,12 @@ glidar_slam:
     scan:
       # Whether the scan is voxelized before use.
       # Avoids overweighting dense points that are in close proximity to the sensor, and reduces the number of points used in scan matching.
-      voxelization_enable: true
+      voxelization_enable: false
       # The size of the voxelization grid used to downsample the scan
       voxelization_size: 0.05
       # Whether the scan is densified by linearly interpolating between points by scan_voxelization_size
       # In junction with scan_voxelization_enable, this can be used to create a uniformly spaced point cloud
-      densification_enable: true
+      densification_enable: false
 
     ##### MAPPING #####
     # Occupancy Grid Parameters
@@ -98,13 +98,13 @@ glidar_slam:
     # The method uses the MSCA method which is more robust against noise, so this value can be relatively large
     ground_extraction_distance_threshold: 0.1
     ground_extraction_adaptive_threshold_block_size: 101
-    ground_extraction_adaptive_threshold_C: -65.0
+    ground_extraction_adaptive_threshold_C: -80.0
   
     ##### GROUND MATCHING #####
     # Ground matching settings
     ground_matching_enable: false
     ground_matching_minimum_score: 0.5
-    ground_matching_max_distance: 2.0
+    ground_matching_max_distance: 5.0
 
     ##### LOOP CLOSURE #####
     #### Loop Closure Parameters
@@ -140,13 +140,13 @@ glidar_slam:
       csm_use_laplace_kernel: true
       csm_use_distance_transform: false
       csm_use_tbb: true
-      csm_debug_enable: true
-      csm_stage_resolutions: [0.05, 0.04, 0.02]
+      csm_debug_enable: false
+      csm_stage_resolutions: [0.05, 0.05, 0.02]
       csm_stage_translation_steps: [0.1, 0.01, 0.001]
-      csm_stage_window_x: [3.0, 0.15, 0.015]
-      csm_stage_window_y: [3.0, 0.15, 0.015]
+      csm_stage_window_x: [1.0, 0.15, 0.015]
+      csm_stage_window_y: [1.0, 0.15, 0.015]
       csm_stage_angular_steps: [0.1, 0.01, 0.001]
-      csm_stage_window_yaw: [0.8, 0.15, 0.015]
+      csm_stage_window_yaw: [0.5, 0.15, 0.015]
 
     csm_loop_closure_detection:
       plugin: glidar_slam/CorrelativeScanMatcherPlugin

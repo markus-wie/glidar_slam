@@ -106,4 +106,84 @@ float logOddsFromProb(float prob)
   return std::log(prob / (1.0f - prob));
 }
 
+std::vector<Point2D> voxelize(const std::vector<Point2D> & input, double voxel_size)
+{
+  if (input.empty()) {
+    return {};
+  }
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+  cloud->reserve(input.size());
+  for (const auto & p : input) {
+    cloud->push_back(pcl::PointXYZ(p.x, p.y, 0.0f));
+  }
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr voxelized_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+  pcl::VoxelGrid<pcl::PointXYZ> voxel_filter;
+  voxel_filter.setInputCloud(cloud);
+  voxel_filter.setLeafSize(
+    static_cast<float>(voxel_size), static_cast<float>(voxel_size), static_cast<float>(voxel_size));
+  voxel_filter.filter(*voxelized_cloud);
+
+  std::vector<Point2D> output;
+  output.reserve(voxelized_cloud->size());
+  for (const auto & p : *voxelized_cloud) {
+    output.push_back({p.x, p.y});
+  }
+  return output;
+}
+
+std::vector<Point2D> densify(
+  const std::vector<Point2D> & input, double target_spacing, double max_gap)
+{
+  if (input.empty() || target_spacing <= 0.0) {
+    return input;
+  }
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+  cloud->reserve(input.size());
+  for (const auto & p : input) {
+    cloud->push_back(pcl::PointXYZ(p.x, p.y, 0.0f));
+  }
+
+  pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
+  kdtree.setInputCloud(cloud);
+
+  std::vector<Point2D> output = input;  // Keep original points
+
+  for (size_t i = 0; i < cloud->size(); ++i) {
+    std::vector<int> pointIdxRadiusSearch;
+    std::vector<float> pointRadiusSquaredDistance;
+
+    // Find neighbors within the max gap
+    if (
+      kdtree.radiusSearch((*cloud)[i], max_gap, pointIdxRadiusSearch, pointRadiusSquaredDistance) >
+      0) {
+      for (size_t j = 1; j < pointIdxRadiusSearch.size(); ++j) {  // Start at 1 to skip self
+        int neighbor_idx = pointIdxRadiusSearch[j];
+
+        // Only process pairs once (j > i) to prevent duplicate interpolation
+        if (neighbor_idx < static_cast<int>(i)) {
+          continue;
+        }
+
+        double dist = std::sqrt(pointRadiusSquaredDistance[j]);
+
+        // Only densify if the gap is larger than our target spacing
+        if (dist > target_spacing) {
+          int num_inserts = static_cast<int>(dist / target_spacing);
+          double dx = (input[neighbor_idx].x - input[i].x) / (num_inserts + 1);
+          double dy = (input[neighbor_idx].y - input[i].y) / (num_inserts + 1);
+
+          for (int k = 1; k <= num_inserts; ++k) {
+            output.push_back({input[i].x + k * dx, input[i].y + k * dy});
+          }
+        }
+      }
+    }
+  }
+
+  return output;
+}
+
 }  // namespace glidar_slam::utils

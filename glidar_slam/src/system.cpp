@@ -132,9 +132,45 @@ double computeYawDistance(const gtsam::Pose3 & lhs, const gtsam::Pose3 & rhs)
 
 std::vector<Point2D> linearInterpolateScan(const LaserScan & scan, double target_spacing = 0.05)
 {
-  std::vector<Point2D> continuous_points;
+  constexpr int window_size = 3;
+  constexpr double max_wall_deviation = 0.2;
 
+  std::vector<Point2D> continuous_points;
   const std::vector<Point2D> & scan_points = scan.points2D();
+  if (scan_points.empty()) {
+    return continuous_points;
+  }
+
+  // Helper lambda to check if the local neighborhood forms a straight line
+  auto isWall = [&](int idx) {
+    int start = std::max(0, idx - window_size);
+    int end = std::min(static_cast<int>(scan_points.size()) - 1, idx + 1 + window_size);
+
+    const Point2D & pA = scan_points[start];
+    const Point2D & pB = scan_points[end];
+
+    double dx = pB.x - pA.x;
+    double dy = pB.y - pA.y;
+    double length = std::hypot(dx, dy);
+
+    if (length < 1e-6) {
+      return false;
+    }
+
+    for (int i = start; i <= end; ++i) {
+      const Point2D & P = scan_points[i];
+      if (!std::isfinite(P.x) || !std::isfinite(P.y)) {
+        return false;
+      }
+
+      // Calculate perpendicular distance from point P to the line AB
+      double dist = std::abs(dx * (pA.y - P.y) - (pA.x - P.x) * dy) / length;
+      if (dist > max_wall_deviation) {
+        return false;
+      }
+    }
+    return true;
+  };
 
   for (size_t i = 0; i < scan_points.size() - 1; ++i) {
     const Point2D & p1 = scan_points[i];
@@ -148,8 +184,8 @@ std::vector<Point2D> linearInterpolateScan(const LaserScan & scan, double target
     double dy = p2.y - p1.y;
     double segment_len = std::hypot(dx, dy);
 
-    // If the gap is huge (e.g., transitioning from a wall to empty space), don't interpolate
-    if (segment_len > 1.0) {
+    // Skip interpolation if gap is huge or if the local segment is not a flat wall
+    if (segment_len > 1.0 || !isWall(i)) {
       continuous_points.push_back({p1.x, p1.y});
       continue;
     }
@@ -161,6 +197,13 @@ std::vector<Point2D> linearInterpolateScan(const LaserScan & scan, double target
       continuous_points.push_back({p1.x + t * dx, p1.y + t * dy});
     }
   }
+
+  // Ensure the final point of the scan is included
+  const Point2D & last_pt = scan_points.back();
+  if (std::isfinite(last_pt.x) && std::isfinite(last_pt.y)) {
+    continuous_points.push_back({last_pt.x, last_pt.y});
+  }
+
   return continuous_points;
 }
 
@@ -1094,18 +1137,40 @@ void SlamSystem::handleGroundMatchingConstraint(
   std::optional<GroundPlaneObservation> & ground_observation, const gtsam::Pose3 & current_guess,
   uint64_t next_keyframe_key)
 {
-  const bool perform_ground_matching = parameters_->ground_matching_enable &&
-                                       reference_keyframe->ground_observation && ground_observation;
+  const bool perform_ground_matching = parameters_->ground_matching_enable && ground_observation;
   if (!perform_ground_matching) {
     return;
   }
 
-  const double INF_VAR = parameters_->unobservable_variance;
-  const Pose2D relative_ground_pose_estimate =
-    utils::toPose2D(reference_keyframe->pose.inverse().compose(current_guess));
+  // Build a short-lived ground submap from the latest keyframe and its history.  Ground points
+  // are stored in each keyframe's base frame, while the scan matcher expects map-frame submap
+  // points and current-frame points plus an absolute map pose estimate.
+  SubmapGrid ground_submap(ground_marking_matcher_->fieldResolutions());
+  const auto history = map_database_->getKeyFrameWindow(reference_keyframe->key, 1);
+  for (const auto & keyframe : history) {
+    if (!keyframe->ground_observation) {
+      continue;
+    }
+    const std::vector<Point2D> marking_points =
+      ground_marking_matcher_->extractMarkingPoints(keyframe->ground_observation->ground_cloud);
 
-  const auto ground_match = ground_marking_matcher_->match(
-    *reference_keyframe->ground_observation, *ground_observation, relative_ground_pose_estimate);
+    const std::vector<Point2D> voxelized_marking_points = utils::voxelize(marking_points, 0.1);
+    const std::vector<Point2D> densified_marking_points =
+      utils::densify(voxelized_marking_points, 0.05, 0.2);
+
+    ground_submap.add(
+      utils::transformScanPoints(densified_marking_points, keyframe->pose), keyframe->key);
+  }
+
+  if (ground_submap.size() == 0) {
+    return;
+  }
+
+  const double INF_VAR = parameters_->unobservable_variance;
+  const Pose2D ground_pose_estimate = utils::toPose2D(current_guess);
+
+  const auto ground_match =
+    ground_marking_matcher_->match(ground_submap, *ground_observation, ground_pose_estimate);
 
   if (!ground_match || ground_match->score < parameters_->ground_matching_minimum_score) {
     return;
@@ -1114,40 +1179,41 @@ void SlamSystem::handleGroundMatchingConstraint(
   gtsam::Matrix66 ground_covariance = gtsam::Matrix66::Zero();
   ground_covariance(0, 0) = INF_VAR;
   ground_covariance(1, 1) = INF_VAR;
-  ground_covariance(2, 2) = ground_match->covariance(2, 2);
-  ground_covariance(3, 3) = ground_match->covariance(0, 0);
-  ground_covariance(4, 4) = ground_match->covariance(1, 1);
+  const Eigen::Matrix3d relative_ground_covariance =
+    transformScanMatchCovarianceToRelativeFrame(ground_match->covariance, reference_keyframe->pose);
+  ground_covariance(2, 2) = relative_ground_covariance(2, 2);
+  ground_covariance(3, 3) = relative_ground_covariance(0, 0);
+  ground_covariance(4, 4) = relative_ground_covariance(1, 1);
   ground_covariance(5, 5) = INF_VAR;
-  ground_covariance(3, 4) = ground_match->covariance(0, 1);
-  ground_covariance(4, 3) = ground_match->covariance(1, 0);
-  ground_covariance(3, 2) = ground_match->covariance(0, 2);
-  ground_covariance(2, 3) = ground_match->covariance(2, 0);
-  ground_covariance(4, 2) = ground_match->covariance(1, 2);
-  ground_covariance(2, 4) = ground_match->covariance(2, 1);
+  ground_covariance(3, 4) = relative_ground_covariance(0, 1);
+  ground_covariance(4, 3) = relative_ground_covariance(1, 0);
+  ground_covariance(3, 2) = relative_ground_covariance(0, 2);
+  ground_covariance(2, 3) = relative_ground_covariance(2, 0);
+  ground_covariance(4, 2) = relative_ground_covariance(1, 2);
+  ground_covariance(2, 4) = relative_ground_covariance(2, 1);
 
   graph_optimizer_->addRelativeFactor(
-    reference_keyframe->key, next_keyframe_key, utils::toPose3(ground_match->optimized_pose),
+    reference_keyframe->key, next_keyframe_key,
+    reference_keyframe->pose.inverse().compose(utils::toPose3(ground_match->optimized_pose)),
     ground_covariance);
 
   if (parameters_->ground_matching_debug_enable) {
+    std::vector<Point2D> reference_points;
+    for (const auto & keyframe : history) {
+      if (keyframe->ground_observation) {
+        const auto marking_points =
+          ground_marking_matcher_->extractMarkingPoints(keyframe->ground_observation->ground_cloud);
+        const auto map_points = utils::transformScanPoints(marking_points, keyframe->pose);
+        reference_points.insert(reference_points.end(), map_points.begin(), map_points.end());
+      }
+    }
+    const auto current_points =
+      ground_marking_matcher_->extractMarkingPoints(ground_observation->ground_cloud);
     const PointCloudXYZRGBAPtr reference_debug_cloud = ground_marking_matcher_->makeDebugCloud(
-      *reference_keyframe->ground_observation, *ground_observation, *ground_match,
-      relative_ground_pose_estimate);
-
-    const gtsam::Vector3 reference_rpy = reference_keyframe->pose.rotation().rpy();
-
-    const auto translation = reference_keyframe->pose.translation();
-
-    const Eigen::Affine3f map_from_reference =
-      Eigen::Translation3f(
-        static_cast<float>(translation.x()), static_cast<float>(translation.y()),
-        static_cast<float>(translation.z())) *
-      Eigen::AngleAxisf(static_cast<float>(reference_rpy.z()), Eigen::Vector3f::UnitZ()) *
-      Eigen::AngleAxisf(static_cast<float>(reference_rpy.y()), Eigen::Vector3f::UnitY()) *
-      Eigen::AngleAxisf(static_cast<float>(reference_rpy.x()), Eigen::Vector3f::UnitX());
+      reference_points, current_points, *ground_match, ground_pose_estimate);
 
     PointCloudXYZRGBAPtr map_debug_cloud = std::make_shared<PointCloudXYZRGBA>();
-    pcl::transformPointCloud(*reference_debug_cloud, *map_debug_cloud, map_from_reference);
+    *map_debug_cloud = *reference_debug_cloud;
 
     std::lock_guard<std::mutex> lock(latest_output_mutex_);
     latest_ground_matching_debug_ = std::move(map_debug_cloud);

@@ -37,6 +37,12 @@ public:
     const GroundPlaneObservation & reference_observation,
     const GroundPlaneObservation & current_observation, const Pose2D & relative_pose) const;
 
+  std::optional<CsmResult> match(
+    const SubmapGrid & submap, const GroundPlaneObservation & current_observation,
+    const Pose2D & pose_estimate) const;
+
+  std::vector<double> fieldResolutions() const;
+
 private:
   std::vector<Point2D> filterCurrentPoints(
     const std::vector<Point2D> & reference_points, const std::vector<Point2D> & current_points,
