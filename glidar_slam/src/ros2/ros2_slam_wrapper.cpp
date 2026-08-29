@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <sstream>
@@ -21,6 +22,7 @@
 #include "glidar_slam/core/camera_model.hpp"
 #include "glidar_slam/core/sensor_data.hpp"
 #include "glidar_slam/ros2/utils.hpp"
+#include "opencv2/imgcodecs.hpp"
 #include "opencv2/imgproc.hpp"
 #include "pcl/common/transforms.h"
 #include "pcl/point_types.h"
@@ -202,6 +204,11 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     std::bind(
       &Ros2SlamWrapper::saveStateCallback, this, std::placeholders::_1, std::placeholders::_2),
     rclcpp::ServicesQoS(), state_callback_group_);
+  save_maps_service_ = this->create_service<glidar_slam_msgs::srv::SaveMaps>(
+    "save_maps",
+    std::bind(
+      &Ros2SlamWrapper::saveMapsCallback, this, std::placeholders::_1, std::placeholders::_2),
+    rclcpp::ServicesQoS(), state_callback_group_);
 
   load_state_service_ = this->create_service<glidar_slam_msgs::srv::LoadSlamState>(
     "load_state",
@@ -288,6 +295,103 @@ void Ros2SlamWrapper::saveStateCallback(
   response->keyframe_count = slam_system_->getKeyFrames().size();
   response->factor_count = slam_system_->getFactorCount();
   response->localization_active = slam_system_->isLocalizationMode();
+}
+
+void Ros2SlamWrapper::saveMapsCallback(
+  std::shared_ptr<glidar_slam_msgs::srv::SaveMaps::Request> request,
+  std::shared_ptr<glidar_slam_msgs::srv::SaveMaps::Response> response)
+{
+  // agreed upon value for unknown occupancy for better visual differentiation
+  constexpr int UNKNOWN_OCCUPANCY = 205;
+
+  if (request->base_filepath.empty() || (!request->save_occupancy && !request->save_texture)) {
+    response->success = false;
+    response->message = "base_filepath must be non-empty and at least one map must be selected";
+    return;
+  }
+
+  const auto snapshot = slam_system_->getLatestGlobalMap();
+  if (!snapshot) {
+    response->success = false;
+    response->message = "No global map is available";
+    return;
+  }
+
+  try {
+    const auto & occupancy_info = snapshot->occupancy.getInfo();
+    if (request->save_occupancy) {
+      const std::string pgm_path = request->base_filepath + ".pgm";
+      const std::string yaml_path = request->base_filepath + ".yaml";
+      std::ofstream pgm(pgm_path, std::ios::binary);
+      if (!pgm) {
+        throw std::runtime_error("Cannot open " + pgm_path);
+      }
+      pgm << "P5\n" << occupancy_info.width << " " << occupancy_info.height << "\n255\n";
+      const auto & data = snapshot->occupancy.getData();
+      for (std::size_t y = 0; y < occupancy_info.height; ++y) {
+        for (std::size_t x = 0; x < occupancy_info.width; ++x) {
+          const std::size_t map_y = occupancy_info.height - 1 - y;
+          const std::size_t map_x = occupancy_info.width - 1 - x;
+          const std::size_t index = map_y * occupancy_info.width + map_x;
+
+          const auto value = data[index];
+          const std::uint8_t pixel =
+            value < 0
+              ? UNKNOWN_OCCUPANCY
+              : static_cast<std::uint8_t>(255U - (static_cast<unsigned int>(value) * 255U / 100U));
+          pgm.put(static_cast<char>(pixel));
+        }
+      }
+
+      std::ofstream yaml(yaml_path);
+      if (!yaml) {
+        throw std::runtime_error("Cannot open " + yaml_path);
+      }
+      yaml << "image: " << pgm_path.substr(pgm_path.find_last_of('/') + 1) << "\n"
+           << "mode: trinary\nresolution: " << occupancy_info.resolution << "\norigin: ["
+           << occupancy_info.origin_x << ", " << occupancy_info.origin_y
+           << ", 0.0]\nnegate: 0\noccupied_thresh: 0.6\nfree_thresh: 0.6\nthreshold: 128\n";
+    }
+
+    if (request->save_texture) {
+      const auto & info = snapshot->texture.getInfo();
+      const auto & rgb = snapshot->texture.getRgbData();
+      if (rgb.size() != static_cast<std::size_t>(info.width) * info.height * 3U) {
+        throw std::runtime_error("Texture map data size does not match its metadata");
+      }
+      cv::Mat image(info.height, info.width, CV_8UC4);
+      for (int r = 0; r < info.height; ++r) {
+        for (int c = 0; c < info.width; ++c) {
+          const std::size_t map_y = info.height - 1 - r;
+          const std::size_t map_x = info.width - 1 - c;
+          const std::size_t index = map_y * info.width + map_x;
+
+          auto & pixel = image.at<cv::Vec4b>(r, c);
+          pixel[0] = rgb[index * 3U + 2U];
+          pixel[1] = rgb[index * 3U + 1U];
+          pixel[2] = rgb[index * 3U];
+          pixel[3] = (pixel[0] || pixel[1] || pixel[2]) ? 255U : 0U;
+        }
+      }
+      const std::string png_path = request->base_filepath + "_texture.png";
+      if (!cv::imwrite(png_path, image)) {
+        throw std::runtime_error("Cannot write " + png_path);
+      }
+      std::ofstream yaml(request->base_filepath + "_texture.yaml");
+      if (!yaml) {
+        throw std::runtime_error("Cannot open texture YAML");
+      }
+      yaml << "image: " << png_path.substr(png_path.find_last_of('/') + 1)
+           << "\nmode: trinary\nresolution: " << info.resolution << "\norigin: [" << info.origin_x
+           << ", " << info.origin_y << ", 0.0]\nnegate: 0\n";
+    }
+  } catch (const std::exception & exception) {
+    response->success = false;
+    response->message = exception.what();
+    return;
+  }
+  response->success = true;
+  response->message = "Maps saved";
 }
 
 void Ros2SlamWrapper::loadStateCallback(
@@ -1009,31 +1113,16 @@ void Ros2SlamWrapper::publishGroundMap(
   const std::shared_ptr<const glidar_slam::core::GlobalMapSnapshot> & map_snapshot,
   const rclcpp::Time & stamp)
 {
-  if (
-    !parameters_->mapping_ground_enable_texture_mapping &&
-    !parameters_->mapping_ground_enable_ground_marking_mapping) {
-    return;
-  }
-
   if (!map_snapshot) {
     return;
   }
+
   if (parameters_->mapping_ground_enable_texture_mapping) {
-    if (map_snapshot->texture.getInfo().width > 0 && map_snapshot->texture.getInfo().height > 0) {
-      ground_texture_image_publisher_->publish(
-        Utils::toRosImage(map_snapshot->texture, parameters_->map_frame, stamp));
-    } else {
-      sensor_msgs::msg::Image empty_image;
-      empty_image.header.stamp = stamp;
-      empty_image.header.frame_id = parameters_->map_frame;
-      empty_image.encoding = "rgb8";
-      ground_texture_image_publisher_->publish(empty_image);
-    }
+    ground_texture_image_publisher_->publish(
+      Utils::toRosImage(map_snapshot->texture, parameters_->map_frame, stamp));
   }
 
-  if (
-    parameters_->mapping_ground_enable_ground_marking_mapping &&
-    map_snapshot->marking.getInfo().width > 0 && map_snapshot->marking.getInfo().height > 0) {
+  if (parameters_->mapping_ground_enable_ground_marking_mapping) {
     ground_marking_grid_publisher_->publish(
       Utils::toRosMessage(map_snapshot->marking, parameters_->map_frame, stamp));
   }

@@ -7,6 +7,7 @@ find_package(geometry_msgs REQUIRED)
 
 set(services
   "srv/SaveSlamState.srv"
+  "srv/SaveMaps.srv"
   "srv/LoadSlamState.srv"
   "srv/SetLocalizationMode.srv"
 )

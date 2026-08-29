@@ -1,0 +1,6 @@
+string base_filepath
+bool save_occupancy
+bool save_texture
+---
+bool success
+string message
