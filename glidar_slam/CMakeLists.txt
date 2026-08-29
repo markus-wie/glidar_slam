@@ -47,6 +47,7 @@ add_library(${PROJECT_NAME}_core SHARED
   src/core/laser_scan.cpp
   src/core/sensor_data.cpp
   src/core/state_serializer.cpp
+  src/core/ekf.cpp
 )
 
 target_precompile_headers(${PROJECT_NAME}_core PUBLIC

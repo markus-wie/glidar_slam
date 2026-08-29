@@ -77,7 +77,7 @@ gtsam::Pose3 makePlanarPose(const gtsam::Pose3 & pose)
   return utils::makePlanarPose(translation.x(), translation.y(), yaw);
 }
 
-gtsam::Matrix66 csmCovarianceToPoseCovariance(
+gtsam::Matrix66 gtsamToEigenCovariance(
   const Eigen::Matrix3d & covariance, double unobservable_variance)
 {
   gtsam::Matrix66 pose_covariance = gtsam::Matrix66::Zero();
@@ -94,6 +94,17 @@ gtsam::Matrix66 csmCovarianceToPoseCovariance(
   pose_covariance(4, 2) = covariance(1, 2);
   pose_covariance(2, 4) = covariance(2, 1);
   return pose_covariance;
+}
+
+Eigen::Matrix3d eigenToGtsamCovariance(const gtsam::Matrix66 & cov6d)
+{
+  Eigen::Matrix3d cov3d;
+
+  // Map indices: x (3), y (4), yaw (2)
+  cov3d << cov6d(3, 3), cov6d(3, 4), cov6d(3, 2), cov6d(4, 3), cov6d(4, 4), cov6d(4, 2),
+    cov6d(2, 3), cov6d(2, 4), cov6d(2, 2);
+
+  return cov3d;
 }
 
 Eigen::Matrix3d transformScanMatchCovarianceToRelativeFrame(
@@ -276,10 +287,15 @@ bool SlamSystem::process(
 
   if (localization_mode_) {
     std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
+
     if (!localization_initialized_) {
       {
         std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
         latest_map_to_odom_ = latest_pose_.pose.compose(latest_odom_pose.inverse());
+
+        Pose2D initial_pose2d = utils::toPose2D(latest_pose_.pose);
+        Eigen::Matrix3d initial_cov = Eigen::Matrix3d::Identity() * 1e-6;
+        ekf_.initialize(initial_pose2d, initial_cov);
 
         SAM_INFO(
           "latest_pose: ({}, {}, {}), latest_odom_pose: ({}, {}, {}), latest_map_to_odom: ({}, {}, "
@@ -303,11 +319,16 @@ bool SlamSystem::process(
       localization_initialized_ = true;
     }
 
-    gtsam::Pose3 current_guess;
-    {
-      std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
-      current_guess = latest_map_to_odom_.compose(latest_odom_pose);
-    }
+    const gtsam::Pose3 odom_delta = previous_odom_pose_.inverse().compose(latest_odom_pose);
+
+    Pose2D odom_delta_2d = utils::toPose2D(odom_delta);
+    previous_odom_pose_ = latest_odom_pose;
+
+    Eigen::Matrix3d odom_cov = eigenToGtsamCovariance(odom_covariance);
+
+    ekf_.predict(odom_delta_2d, odom_cov);
+
+    gtsam::Pose3 current_guess = utils::toPose3(ekf_.getState());
 
     const CsmResult result =
       scan_matcher_->match(*submap_grid_, laser_scan->points2D(), utils::toPose2D(current_guess));
@@ -318,16 +339,19 @@ bool SlamSystem::process(
       SAM_WARN(
         "Localization failed: score {} below threshold {}. Localization lost.", result.score,
         parameters_->localization_minimum_score);
-      return false;  // Localization lost
+      return false;
     }
 
-    gtsam::Pose3 optimized_pose = utils::toPose3(result.optimized_pose);
+    ekf_.update(result.optimized_pose, result.covariance);
+
+    gtsam::Pose3 optimized_pose = utils::toPose3(ekf_.getState());
 
     {
       std::lock_guard<std::mutex> lock(latest_output_mutex_);
       latest_pose_.pose = optimized_pose;
+
       latest_pose_.covariance =
-        csmCovarianceToPoseCovariance(result.covariance, parameters_->unobservable_variance);
+        gtsamToEigenCovariance(ekf_.getCovariance(), parameters_->unobservable_variance);
       latest_low_res_debug_ = result.low_res_debug;
       latest_high_res_debug_ = result.high_res_debug;
     }
@@ -390,18 +414,18 @@ bool SlamSystem::process(
     uint64_t next_key = map_database_->getNextKey();
 
     if (is_initialization) {
-      // 1A. Standard Initialization (Strong Prior)
+      // Standard Initialization (Strong Prior)
       root_pose = initialPoseFromGroundObservation(ground_observation);
       graph_optimizer_->initialize(root_pose, static_cast<uint64_t>(timestamp * 1e6));
     } else {
-      // 1B. Tracking Reset (Weak Prior)
+      // Tracking Reset (Weak Prior)
       root_pose = tracking_reset_pose_;
 
       SAM_INFO(
         "System tracking reset at timestamp: {} with weak prior pose ({}, {}, {})", timestamp,
         root_pose.translation().x(), root_pose.translation().y(), root_pose.rotation().rpy().z());
 
-      // Inflate prior covariance massively (e.g., 10,000 variance) so it anchors the floating
+      // Inflate prior covariance massively so it anchors the floating
       // graph to prevent ISAM2 crashes, but yields immediately when loop closure arrives.
       gtsam::Matrix66 prior_sigmas = gtsam::Matrix66::Zero();
       prior_sigmas.diagonal() << 1e4, 1e4, 1e4, 1e4, 1e4, 1e4;
@@ -416,7 +440,6 @@ bool SlamSystem::process(
       "latest_odom_pose: ({}, {}, {})", latest_odom_pose.translation().x(),
       latest_odom_pose.translation().y(), latest_odom_pose.rotation().rpy().z());
 
-    // 2. Create the unified KeyFrame
     gtsam::Matrix66 prior_sigmas = gtsam::Matrix66::Zero();
     prior_sigmas.diagonal() << 1e4, 1e4, 1e4, 1e4, 1e4, 1e4;
 
@@ -432,11 +455,9 @@ bool SlamSystem::process(
         mapping::buildGround(ground_observation->ground_cloud, *parameters_));
     }
 
-    // 3. Pure Vertex Insertion (No edges! It is a new trajectory branch)
     map_database_->addKeyFrame(new_keyframe);
     map_builder_->submit(new_keyframe);
 
-    // 4. Update internal states and Submap Grid
     {
       std::lock_guard<std::mutex> lock(latest_output_mutex_);
       latest_pose_.pose = root_pose;
@@ -471,10 +492,9 @@ bool SlamSystem::process(
 
   std::shared_ptr<const KeyFrame> reference_keyframe = map_database_->getLatestKeyFrame();
 
-  // Get relative odometry delta and apply to the reference keyframes world pose
-  const gtsam::Pose3 raw_odom_delta =
-    reference_keyframe->odom_pose.inverse().compose(latest_odom_pose);
-  const gtsam::Pose3 current_guess = reference_keyframe->pose.compose(raw_odom_delta);
+  // Get delta from the last keyframes odometry pose
+  const gtsam::Pose3 odom_delta = reference_keyframe->odom_pose.inverse().compose(latest_odom_pose);
+  const gtsam::Pose3 current_guess = reference_keyframe->pose.compose(odom_delta);
 
   // Check if we should spawn a new keyframe based on motion thresholds
   if (!shouldCreateKeyFrame(latest_odom_pose)) {
@@ -540,7 +560,7 @@ bool SlamSystem::process(
   const Eigen::Matrix3d relative_csm_covariance =
     transformScanMatchCovarianceToRelativeFrame(csm_result.covariance, reference_keyframe->pose);
   const gtsam::Matrix66 csm_covariance =
-    csmCovarianceToPoseCovariance(relative_csm_covariance, parameters_->unobservable_variance);
+    gtsamToEigenCovariance(relative_csm_covariance, parameters_->unobservable_variance);
 
   if (parameters_->debug_timings) {
     SAM_INFO(
@@ -557,7 +577,7 @@ bool SlamSystem::process(
 
   // Add Odometry Factor
   graph_optimizer_->addRelativeFactor(
-    reference_keyframe->key, next_keyframe_key, raw_odom_delta,
+    reference_keyframe->key, next_keyframe_key, odom_delta,
     planarOdometryCovariance(odom_covariance, *parameters_));
 
   // Add LiDAR Scan Matching Factor

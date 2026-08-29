@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "glidar_slam/core/ekf.hpp"
 #include "glidar_slam/core/graph_optimizer.hpp"
 #include "glidar_slam/core/ground_plane_extractor.hpp"
 #include "glidar_slam/core/key_frame.hpp"
@@ -105,6 +106,9 @@ private:
   gtsam::Pose3 latest_map_to_odom_;
   PoseEstimate latest_pose_;
 
+  // used for localization mode
+  gtsam::Pose3 previous_odom_pose_;
+
   std::optional<CsmResult::DebugImage> latest_low_res_debug_;
   std::optional<CsmResult::DebugImage> latest_high_res_debug_;
   std::optional<GroundPlaneObservation> latest_ground_observation_;
@@ -117,6 +121,7 @@ private:
   bool localization_mode_{false};
   bool localization_initialized_{false};
   gtsam::Pose3 localization_submap_center_;
+  Pose2EKF ekf_;
 
   mutable std::mutex latest_map_to_odom_mutex_;
   mutable std::mutex latest_output_mutex_;
