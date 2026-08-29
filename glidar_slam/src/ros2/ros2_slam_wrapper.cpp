@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <sstream>
@@ -81,7 +82,16 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->declare_parameter<double>("unobservable_variance", 1e6);
   parameters_->submap_window_size = this->declare_parameter<int>("submap_window_size", 5);
 
-  parameters_->localization_mode = this->declare_parameter<bool>("localization_mode", false);
+  parameters_->mode =
+    parseStartupMode(this->declare_parameter<std::string>("startup.mode", "mapping"));
+  parameters_->map_load_path = this->declare_parameter<std::string>("startup.map_load_path", "");
+  parameters_->initial_pose_use_provided =
+    this->declare_parameter<bool>("startup.initial_pose.use_provided", false);
+  parameters_->initial_pose = this->declare_parameter<std::vector<double>>(
+    "startup.initial_pose.pose", std::vector<double>{0.0, 0.0, 0.0});
+  if (parameters_->initial_pose.size() != 3) {
+    throw std::runtime_error("startup.initial_pose.pose must contain [x, y, yaw]");
+  }
   parameters_->localization_minimum_score =
     this->declare_parameter<double>("localization_minimum_score", 0.5);
 
@@ -300,8 +310,19 @@ void Ros2SlamWrapper::loadStateCallback(
       request->initial_map_pose.position.x, request->initial_map_pose.position.y,
       request->initial_map_pose.position.z));
 
+  Parameters::Mode mode{Parameters::Mode::Mapping};
+  try {
+    mode = parseStartupMode(request->mode);
+  } catch (const std::exception & exception) {
+    response->success = false;
+    response->message = exception.what();
+    response->localization_active = slam_system_->isLocalizationMode();
+    return;
+  }
+
   response->success = slam_system_->loadState(
-    request->path, initial_map_pose, request->use_saved_pose, request->localization_mode, &error);
+    request->path, initial_map_pose, request->use_saved_pose,
+    mode == Parameters::Mode::Localization, &error);
 
   response->message = response->success ? "SLAM state loaded" : error;
 
@@ -443,22 +464,6 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.loop_minimum_score = parameter.as_double();
     } else if (name == "localization_minimum_score") {
       updated.localization_minimum_score = parameter.as_double();
-    } else if (name == "localization_mode") {
-      const bool enable = parameter.as_bool();
-      if (!slam_system_) {
-        if (enable) {
-          result.successful = false;
-          result.reason = "localization_mode can only be enabled after a map has been loaded";
-          return result;
-        }
-      } else if (enable != slam_system_->isLocalizationMode()) {
-        std::string error;
-        if (!slam_system_->setLocalizationMode(enable, gtsam::Pose3(), true, &error)) {
-          result.successful = false;
-          result.reason = error;
-          return result;
-        }
-      }
     } else if (name == "debug_timings") {
       updated.debug_timings = parameter.as_bool();
     }
@@ -1143,6 +1148,17 @@ bool Ros2SlamWrapper::parseGroundRoiRatios(const std::string & value, std::vecto
   }
   ratios = std::move(parsed);
   return true;
+}
+
+Parameters::Mode Ros2SlamWrapper::parseStartupMode(const std::string & value)
+{
+  if (value == "mapping") {
+    return Parameters::Mode::Mapping;
+  }
+  if (value == "localization") {
+    return Parameters::Mode::Localization;
+  }
+  throw std::runtime_error("startup.mode must be either 'mapping' or 'localization'");
 }
 
 visualization_msgs::msg::Marker Ros2SlamWrapper::makeGroundPlaneMarker(

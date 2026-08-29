@@ -181,6 +181,34 @@ SlamSystem::SlamSystem(
   loop_closure_detector_->start();
   map_builder_ = std::make_unique<MapBuilder>(parameters_);
   map_builder_->start();
+
+  const bool localization_startup = parameters_->mode == Parameters::Mode::Localization;
+  if (!parameters_->map_load_path.empty()) {
+    if (!std::filesystem::exists(parameters_->map_load_path)) {
+      if (localization_startup) {
+        throw std::runtime_error(
+          "Startup localization requires a valid map at '" + parameters_->map_load_path + "'");
+      }
+      SAM_WARN(
+        "Startup map path '{}' does not exist; starting with an empty map",
+        parameters_->map_load_path.c_str());
+    } else {
+      std::string error;
+      if (!loadState(
+            parameters_->map_load_path, utils::toPose3(parameters_->initial_pose),
+            !parameters_->initial_pose_use_provided, localization_startup, &error)) {
+        if (localization_startup) {
+          throw std::runtime_error(
+            "Failed to load startup map '" + parameters_->map_load_path + "': " + error);
+        }
+        SAM_WARN(
+          "Failed to load startup map '{}'; starting with an empty map: {}",
+          parameters_->map_load_path.c_str(), error.c_str());
+      }
+    }
+  } else if (localization_startup) {
+    throw std::runtime_error("Startup localization requires startup.map_load_path");
+  }
 }
 
 SlamSystem::~SlamSystem()

@@ -32,6 +32,11 @@ gtsam::Pose3 toPose3(const Pose2D & pose2d)
   return makePlanarPose(pose2d.x, pose2d.y, pose2d.yaw);
 }
 
+gtsam::Pose3 toPose3(const std::vector<double> & pose)
+{
+  return gtsam::Pose3(gtsam::Rot3::Yaw(pose[2]), gtsam::Point3(pose[0], pose[1], 0.0));
+}
+
 bool doubleEqual(double a, double b)
 {
   constexpr double TOLERANCE = 1e-06;

@@ -17,6 +17,8 @@ Pose2D toPose2D(const gtsam::Pose3 & pose);
 
 gtsam::Pose3 toPose3(const Pose2D & pose2d);
 
+gtsam::Pose3 toPose3(const std::vector<double> & pose);
+
 bool doubleEqual(double a, double b);
 
 std::vector<Point2D> transformScanPoints(

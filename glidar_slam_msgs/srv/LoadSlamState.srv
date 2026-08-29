@@ -1,5 +1,5 @@
 string path
-bool localization_mode
+string mode
 bool use_saved_pose
 geometry_msgs/Pose initial_map_pose
 ---

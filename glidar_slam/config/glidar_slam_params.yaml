@@ -30,7 +30,14 @@ glidar_slam:
     minimum_travel_heading: 0.4
     unobservable_variance: 10000.0
     submap_window_size: 10
-    mode: "mapping" # "mapping" or "localization"
+
+    # Startup Parameters
+    startup:
+      mode: "mapping" # "mapping" or "localization"
+      map_load_path: "/workspaces/ros2/glidar_slam_state3.bin"
+      initial_pose:
+        use_provided: false
+        pose: [0.0, 0.0, 0.0] # [x, y, yaw]
 
     # Localization Parameters
     localization_minimum_score: 0.5

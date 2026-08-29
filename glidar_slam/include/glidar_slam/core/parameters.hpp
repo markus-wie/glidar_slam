@@ -17,6 +17,12 @@ struct CsmSearchStage
 
 struct Parameters
 {
+  enum class Mode
+  {
+    Mapping,
+    Localization
+  };
+
   // Coordinate Frame Parameters
   std::string odom_frame{"odom"};
   std::string map_frame{"map"};
@@ -46,8 +52,13 @@ struct Parameters
   double unobservable_variance{1e6};
   int submap_window_size{5};
 
+  // Startup Parameters
+  Mode mode{Mode::Mapping};
+  std::string map_load_path;
+  bool initial_pose_use_provided{false};
+  std::vector<double> initial_pose{0.0, 0.0, 0.0};
+
   // Localization Parameters
-  bool localization_mode{false};
   double localization_minimum_score{0.5};
 
   // Debugging Parameters
@@ -136,7 +147,16 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  minimum_travel_heading: " << p.minimum_travel_heading << ",\n"
      << "  unobservable_variance: " << p.unobservable_variance << ",\n"
      << "  submap_window_size: " << p.submap_window_size << ",\n"
-     << "  localization_mode: " << (p.localization_mode ? "true" : "false") << ",\n"
+     << "  mode: " << (p.mode == Parameters::Mode::Mapping ? "mapping" : "localization") << ",\n"
+     << "  map_load_path: " << p.map_load_path << ",\n"
+     << "  initial_pose_use_provided: " << (p.initial_pose_use_provided ? "true" : "false") << ",\n"
+     << "  initial_pose: [";
+
+  for (std::size_t i = 0; i < p.initial_pose.size(); ++i) {
+    os << p.initial_pose[i] << (i < p.initial_pose.size() - 1 ? ", " : "");
+  }
+
+  os << "],\n"
      << "  localization_minimum_score: " << p.localization_minimum_score << ",\n"
      << "  debug_visualize_covariances: " << (p.debug_visualize_covariances ? "true" : "false")
      << ",\n"
