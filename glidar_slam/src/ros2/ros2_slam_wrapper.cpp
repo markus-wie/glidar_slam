@@ -24,6 +24,7 @@
 #include "pcl/point_types.h"
 #include "pcl_conversions/pcl_conversions.h"
 #include "sensor_msgs/image_encodings.hpp"
+#include "std_msgs/msg/color_rgba.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include "visualization_msgs/msg/marker.hpp"
 
@@ -34,6 +35,7 @@ using glidar_slam::core::LaserScan;
 using glidar_slam::core::Parameters;
 using glidar_slam::core::PointCloudXYZ;
 using glidar_slam::core::SlamSystem;
+using GraphEdge = glidar_slam::core::MapDatabase::GraphEdge;
 
 Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("glidar_slam", options)
 {
@@ -550,7 +552,7 @@ void Ros2SlamWrapper::ScanRGBDCallback(
 
   const auto publish_start = std::chrono::steady_clock::now();
 
-  publishGraph(keyframes, slam_system_->getLoopClosures());
+  publishGraph(keyframes, slam_system_->getEdges());
   publishDebugImage(rclcpp::Time(scan_msg->header.stamp));
   publishGroundMatchingDebug(rclcpp::Time(scan_msg->header.stamp));
 
@@ -818,9 +820,9 @@ std::optional<visualization_msgs::msg::Marker> Ros2SlamWrapper::keyframeCovarian
   return marker;
 }
 
-visualization_msgs::msg::Marker Ros2SlamWrapper::loopClosuresToMarker(
+visualization_msgs::msg::Marker Ros2SlamWrapper::graphEdgesToMarker(
   const std::vector<std::shared_ptr<const KeyFrame>> & keyframes,
-  const std::vector<std::pair<uint64_t, uint64_t>> & loop_closures, const std::string & frame)
+  const std::vector<GraphEdge> & edges, const std::string & frame)
 {
   std::unordered_map<uint64_t, gtsam::Pose3> poses;
   poses.reserve(keyframes.size());
@@ -830,17 +832,19 @@ visualization_msgs::msg::Marker Ros2SlamWrapper::loopClosuresToMarker(
 
   visualization_msgs::msg::Marker marker;
   marker.header.frame_id = frame;
-  marker.ns = "slam_graph_loop_closures";
+  marker.ns = "slam_graph_edges";
   marker.id = 0;
   marker.type = visualization_msgs::msg::Marker::LINE_LIST;
   marker.action = visualization_msgs::msg::Marker::ADD;
   marker.scale.x = 0.04;
-  marker.color.r = 1.0f;
-  marker.color.g = 0.65f;
-  marker.color.b = 0.0f;
+  marker.color.r = 0.1f;
+  marker.color.g = 0.8f;
+  marker.color.b = 1.0f;
   marker.color.a = 1.0f;
 
-  for (const auto & [from_key, to_key] : loop_closures) {
+  for (const auto & edge : edges) {
+    const auto from_key = edge.from_key;
+    const auto to_key = edge.to_key;
     const auto from_pose = poses.find(from_key);
     const auto to_pose = poses.find(to_key);
     if (from_pose == poses.end() || to_pose == poses.end()) {
@@ -852,12 +856,19 @@ visualization_msgs::msg::Marker Ros2SlamWrapper::loopClosuresToMarker(
     from_point.y = from_pose->second.y();
     from_point.z = from_pose->second.z();
     marker.points.push_back(from_point);
+    std_msgs::msg::ColorRGBA edge_color;
+    edge_color.r = edge.type == "LoopClosure" ? 1.0F : 0.1F;
+    edge_color.g = edge.type == "LoopClosure" ? 0.65F : 0.8F;
+    edge_color.b = edge.type == "LoopClosure" ? 0.0F : 1.0F;
+    edge_color.a = 1.0F;
+    marker.colors.push_back(edge_color);
 
     geometry_msgs::msg::Point to_point;
     to_point.x = to_pose->second.x();
     to_point.y = to_pose->second.y();
     to_point.z = to_pose->second.z();
     marker.points.push_back(to_point);
+    marker.colors.push_back(edge_color);
   }
 
   if (marker.points.empty()) {
@@ -868,7 +879,7 @@ visualization_msgs::msg::Marker Ros2SlamWrapper::loopClosuresToMarker(
 
 void Ros2SlamWrapper::publishGraph(
   const std::vector<std::shared_ptr<const KeyFrame>> & keyframes,
-  const std::vector<std::pair<uint64_t, uint64_t>> & loop_closures)
+  const std::vector<GraphEdge> & edges)
 {
   visualization_msgs::msg::MarkerArray marker_array_msg;
 
@@ -891,8 +902,7 @@ void Ros2SlamWrapper::publishGraph(
     }
   }
 
-  marker_array_msg.markers.push_back(
-    loopClosuresToMarker(keyframes, loop_closures, parameters_->map_frame));
+  marker_array_msg.markers.push_back(graphEdgesToMarker(keyframes, edges, parameters_->map_frame));
 
   marker_array_publisher_->publish(marker_array_msg);
 }

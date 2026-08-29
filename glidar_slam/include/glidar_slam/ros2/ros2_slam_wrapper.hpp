@@ -36,6 +36,7 @@ using glidar_slam::core::KeyFrame;
 using glidar_slam::core::Parameters;
 using glidar_slam::core::PointCloudXYZ;
 using glidar_slam::core::SlamSystem;
+using GraphEdge = glidar_slam::core::MapDatabase::GraphEdge;
 
 class Ros2SlamWrapper : public rclcpp::Node
 {
@@ -52,7 +53,7 @@ private:
 
   void publishGraph(
     const std::vector<std::shared_ptr<const KeyFrame>> & keyframes,
-    const std::vector<std::pair<uint64_t, uint64_t>> & loop_closures);
+    const std::vector<GraphEdge> & edges);
   void publishMapToOdom();
   void publishMapsTimerCallback();
   void publishOccupancyGrid(
@@ -106,9 +107,9 @@ private:
     const glidar_slam::core::GroundPlaneObservation & observation, const rclcpp::Time & stamp,
     const std::string & frame);
 
-  static visualization_msgs::msg::Marker loopClosuresToMarker(
+  static visualization_msgs::msg::Marker graphEdgesToMarker(
     const std::vector<std::shared_ptr<const KeyFrame>> & keyframes,
-    const std::vector<std::pair<uint64_t, uint64_t>> & loop_closures, const std::string & frame);
+    const std::vector<GraphEdge> & edges, const std::string & frame);
 
   static std::optional<visualization_msgs::msg::Marker> keyframeCovarianceToMarker(
     const KeyFrame & keyframe, const std::string & frame);

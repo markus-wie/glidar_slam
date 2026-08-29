@@ -510,6 +510,8 @@ bool SlamSystem::process(
   new_keyframe->local_map = std::make_shared<const global_map::LocalMapData>(std::move(local_map));
 
   map_database_->addKeyFrame(new_keyframe);
+  map_database_->addEdge(
+    reference_keyframe->key, new_keyframe->key, MapDatabase::EdgeType::Neighbor);
   map_builder_->submit(map_database_->getSnapshot(next_keyframe_key));
 
   if (parameters_->debug_timings) {
@@ -655,10 +657,7 @@ bool SlamSystem::processLoopClosureProposals()
     graph_optimizer_->addRelativeFactor(
       proposal.from_key, proposal.to_key, proposal.relative_pose, proposal.covariance);
 
-    {
-      std::lock_guard<std::mutex> lock(loop_closures_mutex_);
-      loop_closures_.emplace_back(proposal.from_key, proposal.to_key);
-    }
+    map_database_->addEdge(proposal.from_key, proposal.to_key, MapDatabase::EdgeType::LoopClosure);
 
     SAM_INFO(
       "Loop closure accepted: from={}, to={}, score={}", proposal.from_key, proposal.to_key,
@@ -681,17 +680,14 @@ void SlamSystem::rebuildSubmap()
 
   auto rebuilt_submap = std::make_unique<SubmapGrid>(resolutions);
 
-  const auto keyframes = map_database_->getAllKeyFrames();
+  const auto latest_keyframe = map_database_->getLatestKeyFrame();
 
   auto getkeyframes_time = std::chrono::steady_clock::now();
 
-  const std::size_t window_size =
-    static_cast<std::size_t>(std::max(parameters_->submap_window_size, 0));
-  const std::size_t first_keyframe =
-    keyframes.size() > window_size ? keyframes.size() - window_size : 0;
+  const std::vector<std::shared_ptr<const KeyFrame>> keyframes =
+    map_database_->getKeyFrameWindow(latest_keyframe->key, parameters_->submap_window_size);
 
-  for (std::size_t index = first_keyframe; index < keyframes.size(); ++index) {
-    const auto & keyframe = keyframes[index];
+  for (const std::shared_ptr<const KeyFrame> & keyframe : keyframes) {
     const std::vector<Point2D> points =
       Utils::transformScanPoints(keyframe->scan->points2D(), keyframe->pose);
     rebuilt_submap->add(points, keyframe->key);
@@ -813,8 +809,12 @@ std::vector<std::shared_ptr<const KeyFrame>> SlamSystem::getKeyFrames() const
 
 std::vector<std::pair<uint64_t, uint64_t>> SlamSystem::getLoopClosures() const
 {
-  std::lock_guard<std::mutex> lock(loop_closures_mutex_);
-  return loop_closures_;
+  return map_database_->getLoopClosures();
+}
+
+std::vector<MapDatabase::GraphEdge> SlamSystem::getEdges() const
+{
+  return map_database_->getEdges();
 }
 
 bool SlamSystem::shouldCreateKeyFrame(const gtsam::Pose3 & current_odom_pose) const

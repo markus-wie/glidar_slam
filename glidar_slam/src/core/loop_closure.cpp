@@ -64,6 +64,14 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
   double best_mahalanobis_squared = std::numeric_limits<double>::infinity();
   for (const std::shared_ptr<const KeyFrame> & candidate : nearby_keyframes) {
     double mahalanobis_squared = std::numeric_limits<double>::infinity();
+
+    const size_t order_distance =
+      map_database_->getKeyFrameOrderDistance(candidate->key, query.key);
+
+    if (order_distance < parameters_->loop_minimum_key_separation) {
+      continue;
+    }
+
     if (!isCandidate(query, *candidate, mahalanobis_squared)) {
       continue;
     }
@@ -82,30 +90,27 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
     const std::shared_ptr<const KeyFrame> & candidate = best_candidate;
     const std::vector<Point2D> & candidate_points = candidate->scan->points2D();
 
-    const std::vector<std::shared_ptr<const KeyFrame>> all_keyframes =
-      map_database_->getAllKeyFrames();
-
-    std::size_t candidate_index = all_keyframes.size();
-    for (std::size_t index = 0; index < all_keyframes.size(); ++index) {
-      if (all_keyframes[index]->key == candidate->key) {
-        candidate_index = index;
-        break;
-      }
-    }
-
     SubmapGrid submap_grid(resolutions);
 
-    const std::size_t window = 8;
-    const std::size_t first = candidate_index > window ? candidate_index - window : 0;
-    const std::size_t last = std::min(all_keyframes.size(), candidate_index + window + 1);
+    const std::size_t requested_window_size = parameters_->submap_window_size;
+
+    const std::size_t past_window_size = (requested_window_size / 2) + 1;
+
+    auto past_keyframes = map_database_->getKeyFrameWindow(candidate->key, past_window_size);
+
+    const std::size_t future_window_size =
+      requested_window_size / 2 + (past_window_size - past_keyframes.size());
+
+    const auto future_keyframes =
+      map_database_->getKeyFrameWindowAfter(candidate->key, future_window_size);
+
+    past_keyframes.insert(past_keyframes.end(), future_keyframes.begin(), future_keyframes.end());
 
     SAM_INFO(
-      "Loop closure submap window: candidate={}, index={}, window_size={}, first_index={}, "
-      "last_index={}",
-      candidate->key, candidate_index, window, first, last);
+      "Loop closure submap window: candidate={}, window_size={}, actual_size={}", candidate->key,
+      requested_window_size, past_keyframes.size());
 
-    for (std::size_t index = first; index < last; ++index) {
-      const std::shared_ptr<const KeyFrame> & neighbor = all_keyframes[index];
+    for (const auto & neighbor : past_keyframes) {
       std::vector<Point2D> points;
       if (neighbor->key == candidate->key) {
         points = candidate_points;
@@ -211,12 +216,6 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
 bool LoopClosureDetector::isCandidate(
   const KeyFrame & query, const KeyFrame & candidate, double & mahalanobis_squared) const
 {
-  if (
-    query.key <= candidate.key ||
-    query.key - candidate.key < parameters_->loop_minimum_key_separation) {
-    return false;
-  }
-
   // The mahalanobis distance is meant to act as a distance measure between a probability
   // distribution and a point. Here, however, we want to check the "distance" between two
   // probability distributions. To do that with the help of the mahalanobis distance, we first

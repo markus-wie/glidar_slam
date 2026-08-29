@@ -50,6 +50,7 @@ public:
 
   std::vector<std::shared_ptr<const KeyFrame>> getKeyFrames() const;
   std::vector<std::pair<uint64_t, uint64_t>> getLoopClosures() const;
+  std::vector<MapDatabase::GraphEdge> getEdges() const;
 
   gtsam::Pose3 getMapToOdom() const;
   std::shared_ptr<const GlobalMapSnapshot> getLatestGlobalMap() const;
@@ -85,8 +86,6 @@ private:
   std::optional<GroundPlaneObservation> latest_ground_observation_;
   std::optional<PointCloudXYZRGBA> latest_ground_matching_debug_;
   mutable std::mutex latest_output_mutex_;
-  std::vector<std::pair<uint64_t, uint64_t>> loop_closures_;
-  mutable std::mutex loop_closures_mutex_;
   bool loop_closure_optimization_pending_{false};
 };
 
