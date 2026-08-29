@@ -1,0 +1,6 @@
+string path
+---
+bool success
+string message
+uint64 keyframe_count
+uint64 factor_count

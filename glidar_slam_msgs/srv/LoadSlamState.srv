@@ -1,0 +1,8 @@
+string path
+bool reset_tracking
+geometry_msgs/Pose initial_map_pose
+---
+bool success
+string message
+uint64 keyframe_count
+uint64 factor_count
