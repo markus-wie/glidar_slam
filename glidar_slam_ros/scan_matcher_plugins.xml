@@ -1,0 +1,8 @@
+<library path="glidar_slam_ros_scan_matcher_plugins">
+  <class
+    name="glidar_slam/CorrelativeScanMatcherPlugin"
+    type="glidar_slam_ros::CorrelativeScanMatcherPlugin"
+    base_class_type="glidar_slam_ros::ScanMatcherInterface">
+    <description>Default correlative scan matcher plugin.</description>
+  </class>
+</library>

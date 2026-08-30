@@ -1,19 +1,28 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>glidar_slam</name>
+  <name>glidar_slam_ros</name>
   <version>0.0.0</version>
-  <description>Minimal modular 2D LiDAR SLAM core library (ROS-free)</description>
+  <description>ROS 2 wrapper for the glidar_slam core library</description>
   <maintainer email="markus.wiechers@hm.edu">Markus Wiechers</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <depend>glidar_slam</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>message_filters</depend>
+  <depend>pluginlib</depend>
+  <depend>pcl_conversions</depend>
   <depend>libopencv-dev</depend>
+  <depend>tf2_ros</depend>
   <depend>gtsam</depend>
-  <depend>libpcl-all-dev</depend>
-  <depend>libnanoflann-dev</depend>
-  <depend>tbb</depend>
+  <depend>glidar_slam_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

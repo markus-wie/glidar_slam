@@ -7,50 +7,39 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(nav_msgs REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(geometry_msgs REQUIRED)
-find_package(visualization_msgs REQUIRED)
-find_package(tf2_ros REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(cv_bridge REQUIRED)
-find_package(message_filters REQUIRED)
-find_package(pluginlib REQUIRED)
 find_package(GTSAM REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common registration segmentation)
-find_package(pcl_conversions REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(nanoflann REQUIRED)
 find_package(TBB REQUIRED)
-find_package(glidar_slam_msgs REQUIRED)
 
 include_directories(include)
 
-add_library(${PROJECT_NAME}_core SHARED
-  src/core/scan_matcher/correlative_scan_matcher.cpp
-  src/core/scan_matcher/ground_marking_matcher.cpp
-  src/core/mapping/accumulators.cpp
-  src/core/mapping/global_map.cpp
-  src/core/mapping/local_map.cpp
-  src/core/mapping/map_builder.cpp
-  src/core/utils.cpp
-  src/core/submap_grid.cpp
-  src/core/graph_optimizer.cpp
-  src/core/ground_plane_extractor.cpp
-  src/core/ground_plane_factor.cpp
-  src/core/loop_closure.cpp
-  src/core/system.cpp
-  src/core/key_frame.cpp
-  src/core/map_database.cpp
-  src/core/camera_model.cpp
-  src/core/laser_scan.cpp
-  src/core/sensor_data.cpp
-  src/core/state_serializer.cpp
-  src/core/ekf.cpp
+add_library(${PROJECT_NAME} SHARED
+  src/scan_matcher/correlative_scan_matcher.cpp
+  src/scan_matcher/ground_marking_matcher.cpp
+  src/mapping/accumulators.cpp
+  src/mapping/global_map.cpp
+  src/mapping/local_map.cpp
+  src/mapping/map_builder.cpp
+  src/utils.cpp
+  src/submap_grid.cpp
+  src/graph_optimizer.cpp
+  src/ground_plane_extractor.cpp
+  src/ground_plane_factor.cpp
+  src/loop_closure.cpp
+  src/system.cpp
+  src/key_frame.cpp
+  src/map_database.cpp
+  src/camera_model.cpp
+  src/laser_scan.cpp
+  src/sensor_data.cpp
+  src/state_serializer.cpp
+  src/ekf.cpp
 )
 
-target_precompile_headers(${PROJECT_NAME}_core PUBLIC
+target_precompile_headers(${PROJECT_NAME} PUBLIC
   <Eigen/Dense>
   <Eigen/Geometry>
   <pcl/point_types.h>
@@ -63,20 +52,20 @@ target_precompile_headers(${PROJECT_NAME}_core PUBLIC
   <gtsam/nonlinear/Values.h>
 )
 
-target_include_directories(${PROJECT_NAME}_core
+target_include_directories(${PROJECT_NAME}
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
 
-target_include_directories(${PROJECT_NAME}_core SYSTEM PUBLIC
+target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
   ${PCL_INCLUDE_DIRS}
   ${Eigen3_INCLUDE_DIRS}
 )
 
-target_compile_features(${PROJECT_NAME}_core PUBLIC cxx_std_17)
-target_compile_definitions(${PROJECT_NAME}_core PUBLIC ${PCL_DEFINITIONS})
-target_link_libraries(${PROJECT_NAME}_core
+target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
+target_compile_definitions(${PROJECT_NAME} PUBLIC ${PCL_DEFINITIONS})
+target_link_libraries(${PROJECT_NAME}
   gtsam
   ${PCL_LIBRARIES}
   ${Eigen3_LIBRARIES}
@@ -84,72 +73,10 @@ target_link_libraries(${PROJECT_NAME}_core
   ${OpenCV_LIBS}
 )
 
-target_link_libraries(${PROJECT_NAME}_core TBB::tbb)
+target_link_libraries(${PROJECT_NAME} TBB::tbb)
 
-add_library(${PROJECT_NAME}_ros2 SHARED
-  src/ros2/ros2_slam_wrapper.cpp
-  src/ros2/utils.cpp
-)
-
-add_library(${PROJECT_NAME}_scan_matcher_plugins SHARED
-  src/ros2/correlative_scan_matcher_plugin.cpp
-)
-
-target_compile_features(${PROJECT_NAME}_scan_matcher_plugins PUBLIC cxx_std_17)
-target_link_libraries(${PROJECT_NAME}_scan_matcher_plugins
-  pluginlib::pluginlib
-  rclcpp::rclcpp
-  ${PROJECT_NAME}_core
-)
-
-target_precompile_headers(${PROJECT_NAME}_ros2 PUBLIC
-  <rclcpp/rclcpp.hpp>
-  <tf2_ros/buffer.h>
-  <tf2_ros/transform_broadcaster.h>
-  <tf2_ros/transform_listener.h>
-)
-
-target_include_directories(${PROJECT_NAME}_ros2
-  PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
-)
-
-target_include_directories(${PROJECT_NAME}_ros2 SYSTEM PUBLIC
-  ${PCL_INCLUDE_DIRS}
-  ${Eigen3_INCLUDE_DIRS}
-)
-
-target_compile_features(${PROJECT_NAME}_ros2 PUBLIC cxx_std_17)
-
-target_link_libraries(${PROJECT_NAME}_ros2
-  pluginlib::pluginlib
-  rclcpp::rclcpp
-  ${nav_msgs_TARGETS}
-  ${sensor_msgs_TARGETS}
-  ${geometry_msgs_TARGETS}
-  ${visualization_msgs_TARGETS}
-  ${glidar_slam_msgs_TARGETS}
-  tf2_ros::tf2_ros
-  cv_bridge::cv_bridge
-  message_filters::message_filters
-  pcl_conversions::pcl_conversions
-  ${OpenCV_LIBS}
-  gtsam
-  ${PCL_LIBRARIES}
-)
-
-target_link_libraries(${PROJECT_NAME}_ros2
-  ${PROJECT_NAME}_core
-  gtsam
-)
-
-add_executable(${PROJECT_NAME}_node src/main.cpp)
-target_compile_features(${PROJECT_NAME}_node PUBLIC cxx_std_17)
-target_link_libraries(${PROJECT_NAME}_node
-  rclcpp::rclcpp
-  ${PROJECT_NAME}_ros2
-)
+ament_export_targets(${PROJECT_NAME} HAS_LIBRARY_TARGET)
+ament_export_dependencies(OpenCV GTSAM PCL Eigen3 nanoflann TBB)
 
 install(
   DIRECTORY include/
@@ -157,25 +84,13 @@ install(
 )
 
 install(TARGETS
-  ${PROJECT_NAME}_core
-  ${PROJECT_NAME}_ros2
-  ${PROJECT_NAME}_scan_matcher_plugins
-  ${PROJECT_NAME}_node
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-install(
-  DIRECTORY launch config
-  DESTINATION share/${PROJECT_NAME}
-)
-
-install(
-  FILES scan_matcher_plugins.xml
-  DESTINATION share/${PROJECT_NAME}
-)
-
-pluginlib_export_plugin_description_file(
-  glidar_slam scan_matcher_plugins.xml
+  ${PROJECT_NAME}
+  EXPORT ${PROJECT_NAME}
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin
+  INCLUDES
+  DESTINATION include
 )
 
 ament_package()
