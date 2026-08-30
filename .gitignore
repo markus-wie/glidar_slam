@@ -1,0 +1,16 @@
+# Specific directories
+/build
+/install
+/log
+/bags
+.cache
+.ccache
+/rosdep
+
+# misc
+*.pyc
+**/__pycache__
+**/*.DS_Store
+**/*:Zone.Identifier
+**/*.bag
+**/.venv
