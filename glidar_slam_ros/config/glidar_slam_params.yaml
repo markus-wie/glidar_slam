@@ -11,7 +11,7 @@ glidar_slam:
     # ROS Topic Parameters (Publishers)
     scan_topic: /scan
     tf_topic: /tf
-    odom_topic: /odometry/filtered
+    odom_topic: /odom
 
     # ROS Topic Parameters (Subscribers)
     color_image_topic: /camera/color/image_raw

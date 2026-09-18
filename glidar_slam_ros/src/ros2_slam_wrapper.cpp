@@ -203,23 +203,23 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     odom_subscription_options);
 
   save_state_service_ = this->create_service<glidar_slam_msgs::srv::SaveSlamState>(
-    "save_state",
+    "glidar_slam/save_state",
     std::bind(
       &Ros2SlamWrapper::saveStateCallback, this, std::placeholders::_1, std::placeholders::_2),
     rclcpp::ServicesQoS(), state_callback_group_);
   save_maps_service_ = this->create_service<glidar_slam_msgs::srv::SaveMaps>(
-    "save_maps",
+    "glidar_slam/save_maps",
     std::bind(
       &Ros2SlamWrapper::saveMapsCallback, this, std::placeholders::_1, std::placeholders::_2),
     rclcpp::ServicesQoS(), state_callback_group_);
 
   load_state_service_ = this->create_service<glidar_slam_msgs::srv::LoadSlamState>(
-    "load_state",
+    "glidar_slam/load_state",
     std::bind(
       &Ros2SlamWrapper::loadStateCallback, this, std::placeholders::_1, std::placeholders::_2),
     rclcpp::ServicesQoS(), state_callback_group_);
   set_localization_mode_service_ = this->create_service<glidar_slam_msgs::srv::SetLocalizationMode>(
-    "set_localization_mode",
+    "glidar_slam/set_localization_mode",
     std::bind(
       &Ros2SlamWrapper::setLocalizationModeCallback, this, std::placeholders::_1,
       std::placeholders::_2),
