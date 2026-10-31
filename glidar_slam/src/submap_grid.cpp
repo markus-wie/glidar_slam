@@ -46,8 +46,12 @@ void resizeGrid(
     const int required_height = new_max_y - new_min_y + 1;
     const int new_width = std::max(required_width, grid.width * 2);
     const int new_height = std::max(required_height, grid.height * 2);
-    new_min_x = std::min(new_min_x, grid.origin_x - (new_width - grid.width) / 2);
-    new_min_y = std::min(new_min_y, grid.origin_y - (new_height - grid.height) / 2);
+
+    const int extra_width = new_width - required_width;
+    const int extra_height = new_height - required_height;
+
+    new_min_x -= extra_width / 2;
+    new_min_y -= extra_height / 2;
     new_max_x = new_min_x + new_width - 1;
     new_max_y = new_min_y + new_height - 1;
   }
