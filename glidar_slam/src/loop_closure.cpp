@@ -8,6 +8,7 @@
 #include <string>
 #include <utility>
 
+#include "Eigen/Cholesky"
 #include "Eigen/Eigenvalues"
 #include "glidar_slam/logger/logger.hpp"
 #include "glidar_slam/scan_matcher/correlative_scan_matcher.hpp"
@@ -232,20 +233,11 @@ std::vector<LoopClosureProposal> LoopClosureDetector::findClosures(const KeyFram
 bool LoopClosureDetector::isCandidate(
   const KeyFrame & query, const KeyFrame & candidate, double & mahalanobis_squared) const
 {
-  // The mahalanobis distance is meant to act as a distance measure between a probability
-  // distribution and a point. Here, however, we want to check the "distance" between two
-  // probability distributions. To do that with the help of the mahalanobis distance, we first
-  // compute the distribution of the difference between the two poses. In the best case, we want the
-  // candidate to overlay perfectly with the query, which would result in a difference of zero.
-  // Since that is never exactly the case, we need to define a measure, in this case between the
-  // constructed distribution and the zero vector. On that, we can take the mahalanobis distance.
-
-  // Compute relative pose and Jacobians
   gtsam::Matrix H_candidate;
   gtsam::Matrix H_query;
   const gtsam::Pose3 relative_pose = candidate.pose.between(query.pose, H_candidate, H_query);
 
-  // Hard yaw check is good for early rejection
+  // Hard yaw check
   if (std::abs(relative_pose.rotation().yaw()) > parameters_->loop_maximum_yaw_difference) {
     if (parameters_->loop_debug_enable) {
       SAM_INFO(
@@ -257,44 +249,64 @@ bool LoopClosureDetector::isCandidate(
     return false;
   }
 
-  // Compute relative covariance (summing marginals projected via Jacobians)
   gtsam::Matrix66 cov_candidate = candidate.covariance.value_or(gtsam::Matrix66::Identity() * 1e-4);
   gtsam::Matrix66 cov_query = query.covariance.value_or(gtsam::Matrix66::Identity() * 1e-4);
 
-  gtsam::Matrix66 relative_cov_6d = H_candidate * cov_candidate * H_candidate.transpose() +
-                                    H_query * cov_query * H_query.transpose();
+  // Extract Tangent-Space Translation Covariance:
+  // In GTSAM, indices 3,4,5 represent translation uncertainty in the local frame of the pose.
+  gtsam::Matrix33 local_cov_candidate = cov_candidate.block<3, 3>(3, 3);
+  gtsam::Matrix33 local_cov_query = cov_query.block<3, 3>(3, 3);
 
-  // Extract the 3x3 SE(2) block. GTSAM tangent space is [rx, ry, rz, tx, ty, tz]
-  // We want indices 2 (yaw), 3 (x), 4 (y)
-  gtsam::Matrix33 cov_se2;
-  std::vector<int> idx = {2, 3, 4};
-  for (int i = 0; i < 3; ++i) {
-    for (int j = 0; j < 3; ++j) {
-      cov_se2(i, j) = relative_cov_6d(idx[i], idx[j]);
+  // Project to Global Cartesian Space:
+  // Because the robot might face opposite directions (yaw = 180 deg) at the query vs candidate
+  // time, we cannot compare local covariances directly. We project them into the global map frame.
+  gtsam::Matrix33 R_candidate = candidate.pose.rotation().matrix();
+  gtsam::Matrix33 R_query = query.pose.rotation().matrix();
+
+  gtsam::Matrix33 global_cov_candidate =
+    R_candidate * local_cov_candidate * R_candidate.transpose();
+  gtsam::Matrix33 global_cov_query = R_query * local_cov_query * R_query.transpose();
+
+  // Construct Relative 2D Positional Covariance:
+  // Note: Summing marginal covariances assumes the poses are statistically independent.
+  // In a SLAM graph, they are highly correlated, so this sum OVERESTIMATES the relative
+  // uncertainty. This is a deliberate, fast heuristic: it makes the Mahalanobis gate overly
+  // permissive, ensuring we never accidentally reject valid loop closures due to tight covariance
+  // math.
+  Eigen::Matrix2d cov_xy =
+    global_cov_candidate.block<2, 2>(0, 0) + global_cov_query.block<2, 2>(0, 0);
+
+  // Add a minimum variance floor to guarantee the matrix is invertible
+  cov_xy(0, 0) += 1e-4;
+  cov_xy(1, 1) += 1e-4;
+
+  // Evaluate Global 2D Distance
+  Eigen::Vector2d error_xy(
+    query.pose.translation().x() - candidate.pose.translation().x(),
+    query.pose.translation().y() - candidate.pose.translation().y());
+
+  Eigen::LDLT<Eigen::Matrix2d> covariance_solver(cov_xy);
+  if (
+    covariance_solver.info() != Eigen::Success ||
+    (covariance_solver.vectorD().array() <= 0.0).any()) {
+    if (parameters_->loop_debug_enable) {
+      SAM_INFO(
+        "Loop candidate rejected: query={}, candidate={}, invalid global covariance", query.key,
+        candidate.key);
     }
+    return false;
   }
 
-  // Add minimum variance floor to ensure the matrix is invertible
-  cov_se2(0, 0) += 1e-4;  // Yaw minimum variance
-  cov_se2(1, 1) += 1e-4;
-  cov_se2(2, 2) += 1e-4;
-
-  // Extract the 3-DOF error vector via Logmap to respect manifold geometry
-  const gtsam::Vector6 log_error = gtsam::Pose3::Logmap(relative_pose);
-  gtsam::Vector3 error_se2;
-  error_se2 << log_error(2), log_error(3), log_error(4);
-
-  // Compute exact Mahalanobis distance
-  mahalanobis_squared = error_se2.transpose() * cov_se2.inverse() * error_se2;
+  mahalanobis_squared = error_xy.transpose() * covariance_solver.solve(error_xy);
   const double mahalanobis_limit =
     parameters_->loop_mahalanobis_threshold * parameters_->loop_mahalanobis_threshold;
 
   if (parameters_->loop_debug_enable) {
     SAM_INFO(
-      "Loop proximity gate: query={}, candidate={}, relative_pose=({}, {}, {}), error=({}, {}, "
-      "{}), mahalanobis_squared={}, limit={}, accepted={}",
+      "Loop proximity gate: query={}, candidate={}, relative_pose=({}, {}, {}), error=({}, {}), "
+      "mahalanobis_squared={}, limit={}, accepted={}",
       query.key, candidate.key, relative_pose.x(), relative_pose.y(),
-      relative_pose.rotation().yaw(), error_se2(0), error_se2(1), error_se2(2), mahalanobis_squared,
+      relative_pose.rotation().yaw(), error_xy(0), error_xy(1), mahalanobis_squared,
       mahalanobis_limit, mahalanobis_squared <= mahalanobis_limit);
   }
 

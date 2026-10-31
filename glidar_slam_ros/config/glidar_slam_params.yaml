@@ -109,15 +109,15 @@ glidar_slam:
     ##### LOOP CLOSURE #####
     #### Loop Closure Parameters
     # minimum number of keyframes between query and candidate keyframes to be considered for loop closure
-    loop_minimum_key_separation: 15
+    loop_minimum_key_separation: 20
     # max heading difference between query and candidate keyframes to be considered for loop closure
-    loop_maximum_yaw_difference: 1.0
+    loop_maximum_yaw_difference: 6.28
     # A measure of how many standard deviations are allowed to be in between
     # the relative pose between the query and candidate keyframes 
     # and the expected relative pose.
-    loop_mahalanobis_threshold: 2.0
+    loop_mahalanobis_threshold: 5.0
     # minimum score for a loop closure proposal to be considered valid
-    loop_minimum_score: 0.8
+    loop_minimum_score: 0.9
     
     #### Dynamically loaded scan matcher plugins
     csm_local_tracker:
