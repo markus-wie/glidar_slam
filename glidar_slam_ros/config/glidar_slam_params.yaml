@@ -28,15 +28,15 @@ glidar_slam:
     odom_covariance_diagonal: [0.1, 0.1, 1.0e-6, 1.0e-6, 1.0e-6, 0.05]
 
     # General Parameters
-    minimum_travel_distance: 0.5
+    minimum_travel_distance: 0.4
     minimum_travel_heading: 0.4
     unobservable_variance: 10000.0
-    submap_window_size: 10
+    submap_window_size: 12
 
     # Startup Parameters
     startup:
       mode: "mapping" # "mapping" or "localization"
-      map_load_path: "/workspaces/ros2/glidar_slam_state.bin"
+      map_load_path: ""
       initial_pose:
         use_provided: false
         pose: [0.0, 0.0, 0.0] # [x, y, yaw]
@@ -60,21 +60,21 @@ glidar_slam:
     scan:
       # Whether the scan is voxelized before use.
       # Avoids overweighting dense points that are in close proximity to the sensor, and reduces the number of points used in scan matching.
-      voxelization_enable: true
+      voxelization_enable: false
       # The size of the voxelization grid used to downsample the scan
       voxelization_size: 0.05
       # Whether the scan is densified by linearly interpolating between points by scan_voxelization_size
       # In junction with scan_voxelization_enable, this can be used to create a uniformly spaced point cloud
-      densification_enable: true
+      densification_enable: false
 
     ##### MAPPING #####
     # Occupancy Grid Parameters
     mapping:
       occupancy:
         resolution: 0.04
+        threshold: 0.5
       ground:
         resolution: 0.02
-        threshold: 0.5
         enable_texture_mapping: true
         enable_ground_marking_mapping: true
       prob_hit: 0.7
