@@ -72,9 +72,9 @@ glidar_slam:
         resolution: 0.04
       ground:
         resolution: 0.02
+        threshold: 0.5
         enable_texture_mapping: true
         enable_ground_marking_mapping: true
-      threshold: 200
       prob_hit: 0.7
       prob_miss: 0.4
       prob_cap_min: 0.1192

@@ -334,8 +334,7 @@ void Ros2SlamWrapper::saveMapsCallback(
       for (std::size_t y = 0; y < occupancy_info.height; ++y) {
         for (std::size_t x = 0; x < occupancy_info.width; ++x) {
           const std::size_t map_y = occupancy_info.height - 1 - y;
-          const std::size_t map_x = occupancy_info.width - 1 - x;
-          const std::size_t index = map_y * occupancy_info.width + map_x;
+          const std::size_t index = map_y * occupancy_info.width + x;
 
           const auto value = data[index];
           const std::uint8_t pixel =
@@ -366,8 +365,7 @@ void Ros2SlamWrapper::saveMapsCallback(
       for (uint32_t r = 0; r < info.height; ++r) {
         for (uint32_t c = 0; c < info.width; ++c) {
           const std::size_t map_y = info.height - 1 - r;
-          const std::size_t map_x = info.width - 1 - c;
-          const std::size_t index = map_y * info.width + map_x;
+          const std::size_t index = map_y * info.width + c;
 
           auto & pixel = image.at<cv::Vec4b>(r, c);
           pixel[0] = rgb[index * 3U + 2U];
@@ -551,7 +549,7 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
     } else if (name == "mapping.ground.resolution") {
       updated.mapping_ground_resolution = parameter.as_double();
       rebuild_global_map = true;
-    } else if (name == "mapping.occupancy_threshold") {
+    } else if (name == "mapping.occupancy.threshold") {
       updated.mapping_occupancy_threshold = parameter.as_double();
       rebuild_global_map = true;
     } else if (name == "mapping.prob_hit") {
@@ -591,10 +589,6 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
     }
   }
 
-  if (rebuild_global_map) {
-    slam_system_->rebuildGlobalMap();
-  }
-
   if (
     !std::isfinite(updated.mapping_prob_hit) || updated.mapping_prob_hit <= 0.0 ||
     updated.mapping_prob_hit >= 1.0 || !std::isfinite(updated.mapping_prob_miss) ||
@@ -627,6 +621,11 @@ void Ros2SlamWrapper::ScanRGBDCallback(
   } catch (const cv_bridge::Exception & exception) {
     RCLCPP_WARN(this->get_logger(), "Cannot decode synchronized RGB-D input: %s", exception.what());
     return;
+  // The rebuild reads the shared parameters, so it must run after they have been updated.
+  if (rebuild_global_map) {
+    slam_system_->rebuildGlobalMap();
+  }
+
   }
 
   // Get the latest odometry pose from tf.
