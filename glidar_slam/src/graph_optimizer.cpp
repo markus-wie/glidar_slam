@@ -46,6 +46,7 @@ gtsam::noiseModel::Gaussian::shared_ptr makeCovarianceNoiseModel(
 GraphOptimizer::GraphOptimizer(const std::shared_ptr<Parameters> & params)
 : params_(params), isam_(isam_params_), latest_key_(0), latest_timestamp_(0), initialized_(false)
 {
+  isam_params_.factorization = gtsam::ISAM2Params::QR;
   isam_params_.relinearizeThreshold = params->isam_relinearizeThreshold;
   isam_params_.relinearizeSkip = params->isam_relinearizeSkip;
   isam_ = gtsam::ISAM2(isam_params_);
