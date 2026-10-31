@@ -55,6 +55,8 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   parameters_->scan_frame = this->declare_parameter<std::string>("scan_frame", "laser");
   parameters_->camera_frame = this->declare_parameter<std::string>("camera_frame", "camera");
   parameters_->base_frame = this->declare_parameter<std::string>("base_frame", "base_link");
+  tf_lookup_timeout_seconds_ =
+    this->declare_parameter<double>("tf_lookup_timeout", tf_lookup_timeout_seconds_);
 
   parameters_->scan_topic = this->declare_parameter<std::string>("scan_topic", "/scan");
   parameters_->tf_topic = this->declare_parameter<std::string>("tf_topic", "/tf");
@@ -69,6 +71,7 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
 
   parameters_->approx_sync_max_interval =
     this->declare_parameter<double>("approx_sync_max_interval", 0.1);
+  use_rgbd_ = this->declare_parameter<bool>("use_rgbd", false);
 
   parameters_->odom_covariance_diagonal = this->declare_parameter<std::vector<double>>(
     "odom_covariance_diagonal", std::vector<double>{-1.0, -1.0, -1.0, -1.0, -1.0, -1.0});
@@ -225,19 +228,33 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
       std::placeholders::_2),
     rclcpp::ServicesQoS(), state_callback_group_);
 
-  scan_subscriber_.subscribe(this, parameters_->scan_topic, 5);
-  color_image_subscriber_.subscribe(this, parameters_->color_image_topic, 5);
-  aligned_depth_image_subscriber_.subscribe(this, parameters_->aligned_depth_image_topic, 5);
-  color_camera_info_subscriber_.subscribe(this, parameters_->color_camera_info_topic, 5);
+  if (use_rgbd_) {
+    RCLCPP_INFO(
+      this->get_logger(), "Initializing in RGB-D + LiDAR SLAM mode (message_filters sync enabled)");
 
-  ground_synchronizer_ = std::make_shared<message_filters::Synchronizer<GroundSyncPolicy>>(
-    GroundSyncPolicy(50), scan_subscriber_, color_image_subscriber_,
-    aligned_depth_image_subscriber_, color_camera_info_subscriber_);
-  ground_synchronizer_->registerCallback(std::bind(
-    &Ros2SlamWrapper::ScanRGBDCallback, this, std::placeholders::_1, std::placeholders::_2,
-    std::placeholders::_3, std::placeholders::_4));
-  ground_synchronizer_->setMaxIntervalDuration(
-    rclcpp::Duration::from_seconds(parameters_->approx_sync_max_interval));
+    scan_filter_subscriber_.subscribe(
+      this, parameters_->scan_topic, 5, camera_subscription_options);
+    color_image_subscriber_.subscribe(
+      this, parameters_->color_image_topic, 5, camera_subscription_options);
+    aligned_depth_image_subscriber_.subscribe(
+      this, parameters_->aligned_depth_image_topic, 5, camera_subscription_options);
+    color_camera_info_subscriber_.subscribe(
+      this, parameters_->color_camera_info_topic, 5, camera_subscription_options);
+
+    ground_synchronizer_ = std::make_shared<message_filters::Synchronizer<GroundSyncPolicy>>(
+      GroundSyncPolicy(50), scan_filter_subscriber_, color_image_subscriber_,
+      aligned_depth_image_subscriber_, color_camera_info_subscriber_);
+    ground_synchronizer_->registerCallback(std::bind(
+      &Ros2SlamWrapper::scanRgbdCallback, this, std::placeholders::_1, std::placeholders::_2,
+      std::placeholders::_3, std::placeholders::_4));
+    ground_synchronizer_->setMaxIntervalDuration(
+      rclcpp::Duration::from_seconds(parameters_->approx_sync_max_interval));
+  } else {
+    RCLCPP_INFO(this->get_logger(), "Initializing in 2D LiDAR-only SLAM mode");
+    direct_scan_subscriber_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
+      parameters_->scan_topic, rclcpp::SensorDataQoS(),
+      std::bind(&Ros2SlamWrapper::scanOnlyCallback, this, std::placeholders::_1));
+  }
 
   // Publishers
   marker_array_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
@@ -604,36 +621,43 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
 
   *parameters_ = std::move(updated);
 
-  return result;
-}
-
-void Ros2SlamWrapper::ScanRGBDCallback(
-  const sensor_msgs::msg::LaserScan::ConstSharedPtr & scan_msg,
-  const sensor_msgs::msg::Image::ConstSharedPtr & color_msg,
-  const sensor_msgs::msg::Image::ConstSharedPtr & depth_msg,
-  const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg)
-{
-  cv_bridge::CvImageConstPtr cv_ptr_color;
-  cv_bridge::CvImageConstPtr cv_ptr_depth;
-  try {
-    cv_ptr_color = cv_bridge::toCvShare(color_msg, sensor_msgs::image_encodings::BGR8);
-    cv_ptr_depth = cv_bridge::toCvShare(depth_msg, depth_msg->encoding);
-  } catch (const cv_bridge::Exception & exception) {
-    RCLCPP_WARN(this->get_logger(), "Cannot decode synchronized RGB-D input: %s", exception.what());
-    return;
   // The rebuild reads the shared parameters, so it must run after they have been updated.
   if (rebuild_global_map) {
     slam_system_->rebuildGlobalMap();
   }
 
-  }
+  return result;
+}
+
+void Ros2SlamWrapper::scanOnlyCallback(const sensor_msgs::msg::LaserScan::ConstSharedPtr & scan_msg)
+{
+  processFrame(scan_msg);
+}
+
+void Ros2SlamWrapper::scanRgbdCallback(
+  const sensor_msgs::msg::LaserScan::ConstSharedPtr & scan_msg,
+  const sensor_msgs::msg::Image::ConstSharedPtr & color_msg,
+  const sensor_msgs::msg::Image::ConstSharedPtr & depth_msg,
+  const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg)
+{
+  processFrame(scan_msg, color_msg, depth_msg, camera_info_msg);
+}
+
+void Ros2SlamWrapper::processFrame(
+  const sensor_msgs::msg::LaserScan::ConstSharedPtr & scan_msg,
+  const sensor_msgs::msg::Image::ConstSharedPtr & color_msg,
+  const sensor_msgs::msg::Image::ConstSharedPtr & depth_msg,
+  const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg)
+{
+  const rclcpp::Time scan_stamp(scan_msg->header.stamp);
+  const bool has_rgbd = color_msg && depth_msg && camera_info_msg;
 
   // Get the latest odometry pose from tf.
   gtsam::Pose3 odom_pose;
   try {
-    geometry_msgs::msg::TransformStamped transform_stamped = tf_buffer_->lookupTransform(
+    const geometry_msgs::msg::TransformStamped transform_stamped = tf_buffer_->lookupTransform(
       parameters_->odom_frame, parameters_->base_frame, scan_msg->header.stamp,
-      rclcpp::Duration::from_seconds(0.05));
+      rclcpp::Duration::from_seconds(tf_lookup_timeout_seconds_));
     odom_pose = gtsam::Pose3(
       gtsam::Rot3::Quaternion(
         transform_stamped.transform.rotation.w, transform_stamped.transform.rotation.x,
@@ -641,33 +665,32 @@ void Ros2SlamWrapper::ScanRGBDCallback(
       gtsam::Point3(
         transform_stamped.transform.translation.x, transform_stamped.transform.translation.y,
         transform_stamped.transform.translation.z));
-  } catch (const tf2::TransformException & ex) {
-    RCLCPP_WARN(this->get_logger(), "Could not get odometry pose from tf: %s", ex.what());
+  } catch (const tf2::TransformException & exception) {
+    RCLCPP_WARN(this->get_logger(), "Could not get odometry pose from tf: %s", exception.what());
     return;
   }
 
-  Eigen::Affine3f base_from_scan_eigen = Eigen::Affine3f::Identity();
+  Eigen::Affine3f base_from_scan = Eigen::Affine3f::Identity();
   try {
     const std::string scan_frame =
       scan_msg->header.frame_id.empty() ? parameters_->scan_frame : scan_msg->header.frame_id;
-    const geometry_msgs::msg::TransformStamped base_from_scan =
+    const geometry_msgs::msg::TransformStamped transform =
       tf_buffer_->lookupTransform(parameters_->base_frame, scan_frame, scan_msg->header.stamp);
-    const auto & translation = base_from_scan.transform.translation;
-    const auto & rotation = base_from_scan.transform.rotation;
-    base_from_scan_eigen.translate(Eigen::Vector3f(
-      static_cast<float>(translation.x), static_cast<float>(translation.y),
-      static_cast<float>(translation.z)));
-    base_from_scan_eigen.rotate(Eigen::Quaternionf(
-      static_cast<float>(rotation.w), static_cast<float>(rotation.x),
-      static_cast<float>(rotation.y), static_cast<float>(rotation.z)));
-  } catch (const tf2::TransformException & ex) {
+    base_from_scan.translate(Eigen::Vector3f(
+      static_cast<float>(transform.transform.translation.x),
+      static_cast<float>(transform.transform.translation.y),
+      static_cast<float>(transform.transform.translation.z)));
+    base_from_scan.rotate(Eigen::Quaternionf(
+      static_cast<float>(transform.transform.rotation.w),
+      static_cast<float>(transform.transform.rotation.x),
+      static_cast<float>(transform.transform.rotation.y),
+      static_cast<float>(transform.transform.rotation.z)));
+  } catch (const tf2::TransformException & exception) {
     RCLCPP_WARN(
       this->get_logger(), "Could not transform scan frame '%s' to base frame '%s': %s",
-      scan_msg->header.frame_id.c_str(), parameters_->base_frame.c_str(), ex.what());
+      scan_msg->header.frame_id.c_str(), parameters_->base_frame.c_str(), exception.what());
     return;
   }
-
-  const rclcpp::Time scan_stamp(scan_msg->header.stamp);
 
   std::vector<glidar_slam::Point2D> scan_points;
   scan_points.reserve(scan_msg->ranges.size());
@@ -675,80 +698,80 @@ void Ros2SlamWrapper::ScanRGBDCallback(
   for (const float range : scan_msg->ranges) {
     if (std::isfinite(range) && range >= scan_msg->range_min && range <= scan_msg->range_max) {
       const Eigen::Vector3f point =
-        base_from_scan_eigen *
-        Eigen::Vector3f(range * std::cos(angle), range * std::sin(angle), 0.0F);
+        base_from_scan * Eigen::Vector3f(range * std::cos(angle), range * std::sin(angle), 0.0F);
       scan_points.push_back({point.x(), point.y()});
     }
     angle += scan_msg->angle_increment;
   }
-  const std::shared_ptr<const LaserScan> laser_scan =
-    std::make_shared<LaserScan>(std::move(scan_points));
 
+  const auto laser_scan = std::make_shared<LaserScan>(std::move(scan_points));
   glidar_slam::SensorData sensor_data(laser_scan);
+  cv_bridge::CvImageConstPtr cv_ptr_color;
   Eigen::Affine3f base_from_camera_eigen = Eigen::Affine3f::Identity();
 
-  geometry_msgs::msg::TransformStamped base_from_camera;
-  try {
-    base_from_camera = tf_buffer_->lookupTransform(
-      parameters_->base_frame, color_msg->header.frame_id, color_msg->header.stamp);
-  } catch (const tf2::TransformException & exception) {
-    RCLCPP_WARN(
-      this->get_logger(), "Cannot transform RGB-D camera frame to base frame: %s",
-      exception.what());
-    return;
+  if (has_rgbd) {
+    try {
+      cv_ptr_color = cv_bridge::toCvShare(color_msg, sensor_msgs::image_encodings::BGR8);
+      const cv_bridge::CvImageConstPtr cv_ptr_depth =
+        cv_bridge::toCvShare(depth_msg, depth_msg->encoding);
+
+      const geometry_msgs::msg::TransformStamped base_from_camera = tf_buffer_->lookupTransform(
+        parameters_->base_frame, color_msg->header.frame_id, color_msg->header.stamp);
+      const auto & translation = base_from_camera.transform.translation;
+      const auto & rotation = base_from_camera.transform.rotation;
+      base_from_camera_eigen.translate(Eigen::Vector3f(
+        static_cast<float>(translation.x), static_cast<float>(translation.y),
+        static_cast<float>(translation.z)));
+      base_from_camera_eigen.rotate(Eigen::Quaternionf(
+        static_cast<float>(rotation.w), static_cast<float>(rotation.x),
+        static_cast<float>(rotation.y), static_cast<float>(rotation.z)));
+
+      const glidar_slam::CameraModel camera_model(
+        cv::Size(
+          static_cast<int>(camera_info_msg->width), static_cast<int>(camera_info_msg->height)),
+        static_cast<float>(camera_info_msg->k[0]), static_cast<float>(camera_info_msg->k[4]),
+        static_cast<float>(camera_info_msg->k[2]), static_cast<float>(camera_info_msg->k[5]),
+        base_from_camera_eigen);
+
+      sensor_data =
+        glidar_slam::SensorData(cv_ptr_color->image, cv_ptr_depth->image, laser_scan, camera_model);
+    } catch (const std::exception & exception) {
+      RCLCPP_WARN(this->get_logger(), "Failed to prepare RGB-D payload: %s", exception.what());
+      return;
+    }
   }
 
-  const auto & translation = base_from_camera.transform.translation;
-  const auto & rotation = base_from_camera.transform.rotation;
+  gtsam::Matrix66 odom_covariance;
+  {
+    std::lock_guard<std::mutex> lock(odom_covariance_mutex_);
+    odom_covariance = latest_odom_covariance_;
+  }
 
-  base_from_camera_eigen.translate(Eigen::Vector3f(
-    static_cast<float>(translation.x), static_cast<float>(translation.y),
-    static_cast<float>(translation.z)));
-  base_from_camera_eigen.rotate(Eigen::Quaternionf(
-    static_cast<float>(rotation.w), static_cast<float>(rotation.x), static_cast<float>(rotation.y),
-    static_cast<float>(rotation.z)));
-
-  const glidar_slam::CameraModel camera_model(
-    cv::Size(static_cast<int>(camera_info_msg->width), static_cast<int>(camera_info_msg->height)),
-    static_cast<float>(camera_info_msg->k[0]), static_cast<float>(camera_info_msg->k[4]),
-    static_cast<float>(camera_info_msg->k[2]), static_cast<float>(camera_info_msg->k[5]),
-    base_from_camera_eigen);
-
-  sensor_data =
-    glidar_slam::SensorData(cv_ptr_color->image, cv_ptr_depth->image, laser_scan, camera_model);
-
-  if (!slam_system_->process(
-        scan_stamp.seconds(), sensor_data, odom_pose, latest_odom_covariance_)) {
+  if (!slam_system_->process(scan_stamp.seconds(), sensor_data, odom_pose, odom_covariance)) {
     return;
   }
 
   publishPoseEstimate(scan_stamp);
-
-  std::vector<std::shared_ptr<const KeyFrame>> keyframes = slam_system_->getKeyFrames();
+  publishGraph(slam_system_->getKeyFrames(), slam_system_->getEdges());
+  publishDebugImage(scan_stamp);
 
   const auto publish_start = std::chrono::steady_clock::now();
+  publishGroundMatchingDebug(scan_stamp);
 
-  publishGraph(keyframes, slam_system_->getEdges());
-  publishDebugImage(rclcpp::Time(scan_msg->header.stamp));
-  publishGroundMatchingDebug(rclcpp::Time(scan_msg->header.stamp));
-
-  if (parameters_->ground_debug_enable) {
+  if (has_rgbd && parameters_->ground_debug_enable) {
     const auto observation = slam_system_->getLatestGroundObservation();
-
-    if (!observation) {
-      return;
+    if (observation) {
+      const glidar_slam::CameraIntrinsics intrinsics{
+        camera_info_msg->k[0], camera_info_msg->k[4], camera_info_msg->k[2], camera_info_msg->k[5]};
+      publishGroundDebugImage(
+        *observation, cv_ptr_color->image, intrinsics, base_from_camera_eigen);
+      publishGroundDebug(*observation, color_msg->header.stamp);
     }
-
-    const glidar_slam::CameraIntrinsics intrinsics{
-      camera_info_msg->k[0], camera_info_msg->k[4], camera_info_msg->k[2], camera_info_msg->k[5]};
-    publishGroundDebugImage(*observation, cv_ptr_color->image, intrinsics, base_from_camera_eigen);
-    publishGroundDebug(*observation, color_msg->header.stamp);
   }
 
   const double elapsed_ms =
     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - publish_start)
       .count();
-
   if (parameters_->debug_timings) {
     RCLCPP_INFO(
       this->get_logger(), "Publishing graph, occupancy grid, and ground map took %.2f ms",
@@ -792,6 +815,7 @@ void Ros2SlamWrapper::odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr
                                                      : parameters_->unobservable_variance;
   };
 
+  std::lock_guard<std::mutex> lock(odom_covariance_mutex_);
   latest_odom_covariance_.setZero();
   if (
     std::find(

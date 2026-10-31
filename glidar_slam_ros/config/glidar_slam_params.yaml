@@ -7,6 +7,7 @@ glidar_slam:
     scan_frame: laser
     camera_frame: camera
     base_frame: base_link
+    tf_lookup_timeout: 0.1
     
     # ROS Topic Parameters (Publishers)
     scan_topic: /scan
@@ -19,6 +20,7 @@ glidar_slam:
     color_camera_info_topic: /camera/color/camera_info
 
     # Synchronization Parameter
+    use_rgbd: false
     approx_sync_max_interval: 0.1
 
     # Odometry Covariance Override

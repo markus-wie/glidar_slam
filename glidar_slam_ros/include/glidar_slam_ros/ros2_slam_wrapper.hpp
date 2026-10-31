@@ -51,11 +51,17 @@ public:
 private:
   void odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr & msg);
 
-  void ScanRGBDCallback(
+  void scanOnlyCallback(const sensor_msgs::msg::LaserScan::ConstSharedPtr & scan_msg);
+  void scanRgbdCallback(
     const sensor_msgs::msg::LaserScan::ConstSharedPtr & scan_msg,
     const sensor_msgs::msg::Image::ConstSharedPtr & color_msg,
     const sensor_msgs::msg::Image::ConstSharedPtr & depth_msg,
     const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg);
+  void processFrame(
+    const sensor_msgs::msg::LaserScan::ConstSharedPtr & scan_msg,
+    const sensor_msgs::msg::Image::ConstSharedPtr & color_msg = nullptr,
+    const sensor_msgs::msg::Image::ConstSharedPtr & depth_msg = nullptr,
+    const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg = nullptr);
 
   void saveStateCallback(
     std::shared_ptr<glidar_slam_msgs::srv::SaveSlamState::Request> request,
@@ -148,13 +154,13 @@ private:
   // ROS2 callback groups
   rclcpp::CallbackGroup::SharedPtr transform_broadcast_callback_group_;
   rclcpp::CallbackGroup::SharedPtr odom_callback_group_;
-  rclcpp::CallbackGroup::SharedPtr scan_callback_group_;
   rclcpp::CallbackGroup::SharedPtr camera_callback_group_;
   rclcpp::CallbackGroup::SharedPtr map_callback_group_;
   rclcpp::CallbackGroup::SharedPtr state_callback_group_;
 
   // Subscribers
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_subscriber_;
+  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr direct_scan_subscriber_;
   rclcpp::Service<glidar_slam_msgs::srv::SaveSlamState>::SharedPtr save_state_service_;
   rclcpp::Service<glidar_slam_msgs::srv::SaveMaps>::SharedPtr save_maps_service_;
   rclcpp::Service<glidar_slam_msgs::srv::LoadSlamState>::SharedPtr load_state_service_;
@@ -164,7 +170,7 @@ private:
   using GroundSyncPolicy = message_filters::sync_policies::ApproximateTime<
     sensor_msgs::msg::LaserScan, sensor_msgs::msg::Image, sensor_msgs::msg::Image,
     sensor_msgs::msg::CameraInfo>;
-  message_filters::Subscriber<sensor_msgs::msg::LaserScan> scan_subscriber_;
+  message_filters::Subscriber<sensor_msgs::msg::LaserScan> scan_filter_subscriber_;
   message_filters::Subscriber<sensor_msgs::msg::Image> color_image_subscriber_;
   message_filters::Subscriber<sensor_msgs::msg::Image> aligned_depth_image_subscriber_;
   message_filters::Subscriber<sensor_msgs::msg::CameraInfo> color_camera_info_subscriber_;
@@ -190,9 +196,9 @@ private:
 
   // Variables
   gtsam::Matrix66 latest_odom_covariance_;
-  sensor_msgs::msg::Image::ConstSharedPtr latest_color_msg;
-  sensor_msgs::msg::Image::ConstSharedPtr latest_depth_msg;
-  sensor_msgs::msg::CameraInfo::ConstSharedPtr latest_camera_info_msg;
+  std::mutex odom_covariance_mutex_;
+  double tf_lookup_timeout_seconds_{0.1};
+  bool use_rgbd_{false};
 
   // ROS2 Parameters
   std::shared_ptr<Parameters> parameters_;
