@@ -29,7 +29,7 @@
 #include "pcl_conversions/pcl_conversions.h"
 #include "sensor_msgs/image_encodings.hpp"
 #include "std_msgs/msg/color_rgba.hpp"
-#include "tf2/LinearMath/Quaternion.h"
+#include "tf2/LinearMath/Quaternion.hpp"
 #include "visualization_msgs/msg/marker.hpp"
 
 namespace glidar_slam_ros {
@@ -244,9 +244,10 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     ground_synchronizer_ = std::make_shared<message_filters::Synchronizer<GroundSyncPolicy>>(
       GroundSyncPolicy(50), scan_filter_subscriber_, color_image_subscriber_,
       aligned_depth_image_subscriber_, color_camera_info_subscriber_);
-    ground_synchronizer_->registerCallback(std::bind(
-      &Ros2SlamWrapper::scanRgbdCallback, this, std::placeholders::_1, std::placeholders::_2,
-      std::placeholders::_3, std::placeholders::_4));
+    ground_synchronizer_->registerCallback(
+      std::bind(
+        &Ros2SlamWrapper::scanRgbdCallback, this, std::placeholders::_1, std::placeholders::_2,
+        std::placeholders::_3, std::placeholders::_4));
     ground_synchronizer_->setMaxIntervalDuration(
       rclcpp::Duration::from_seconds(parameters_->approx_sync_max_interval));
   } else {
@@ -676,15 +677,17 @@ void Ros2SlamWrapper::processFrame(
       scan_msg->header.frame_id.empty() ? parameters_->scan_frame : scan_msg->header.frame_id;
     const geometry_msgs::msg::TransformStamped transform =
       tf_buffer_->lookupTransform(parameters_->base_frame, scan_frame, scan_msg->header.stamp);
-    base_from_scan.translate(Eigen::Vector3f(
-      static_cast<float>(transform.transform.translation.x),
-      static_cast<float>(transform.transform.translation.y),
-      static_cast<float>(transform.transform.translation.z)));
-    base_from_scan.rotate(Eigen::Quaternionf(
-      static_cast<float>(transform.transform.rotation.w),
-      static_cast<float>(transform.transform.rotation.x),
-      static_cast<float>(transform.transform.rotation.y),
-      static_cast<float>(transform.transform.rotation.z)));
+    base_from_scan.translate(
+      Eigen::Vector3f(
+        static_cast<float>(transform.transform.translation.x),
+        static_cast<float>(transform.transform.translation.y),
+        static_cast<float>(transform.transform.translation.z)));
+    base_from_scan.rotate(
+      Eigen::Quaternionf(
+        static_cast<float>(transform.transform.rotation.w),
+        static_cast<float>(transform.transform.rotation.x),
+        static_cast<float>(transform.transform.rotation.y),
+        static_cast<float>(transform.transform.rotation.z)));
   } catch (const tf2::TransformException & exception) {
     RCLCPP_WARN(
       this->get_logger(), "Could not transform scan frame '%s' to base frame '%s': %s",
@@ -719,12 +722,14 @@ void Ros2SlamWrapper::processFrame(
         parameters_->base_frame, color_msg->header.frame_id, color_msg->header.stamp);
       const auto & translation = base_from_camera.transform.translation;
       const auto & rotation = base_from_camera.transform.rotation;
-      base_from_camera_eigen.translate(Eigen::Vector3f(
-        static_cast<float>(translation.x), static_cast<float>(translation.y),
-        static_cast<float>(translation.z)));
-      base_from_camera_eigen.rotate(Eigen::Quaternionf(
-        static_cast<float>(rotation.w), static_cast<float>(rotation.x),
-        static_cast<float>(rotation.y), static_cast<float>(rotation.z)));
+      base_from_camera_eigen.translate(
+        Eigen::Vector3f(
+          static_cast<float>(translation.x), static_cast<float>(translation.y),
+          static_cast<float>(translation.z)));
+      base_from_camera_eigen.rotate(
+        Eigen::Quaternionf(
+          static_cast<float>(rotation.w), static_cast<float>(rotation.x),
+          static_cast<float>(rotation.y), static_cast<float>(rotation.z)));
 
       const glidar_slam::CameraModel camera_model(
         cv::Size(
@@ -1323,8 +1328,9 @@ visualization_msgs::msg::Marker Ros2SlamWrapper::makeGroundPlaneMarker(
         Eigen::Quaternionf(Eigen::AngleAxisf(static_cast<float>(M_PI), Eigen::Vector3f::UnitX()));
     }
   } else {
-    orientation = Eigen::Quaternionf(Eigen::AngleAxisf(
-      std::acos(std::clamp(normal.z(), -1.0F, 1.0F)), rotation_axis.normalized()));
+    orientation = Eigen::Quaternionf(
+      Eigen::AngleAxisf(
+        std::acos(std::clamp(normal.z(), -1.0F, 1.0F)), rotation_axis.normalized()));
   }
 
   marker.pose.position.x = plane_point.x();

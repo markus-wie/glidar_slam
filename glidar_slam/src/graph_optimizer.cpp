@@ -82,8 +82,9 @@ void GraphOptimizer::addPriorFactor(uint64_t key, const gtsam::Pose3 & pose)
 void GraphOptimizer::addPriorFactor(
   uint64_t key, const gtsam::Pose3 & pose, const gtsam::Matrix66 & covariance)
 {
-  pending_factors_.add(gtsam::PriorFactor<gtsam::Pose3>(
-    key, pose, makeCovarianceNoiseModel(covariance, params_->unobservable_variance)));
+  pending_factors_.add(
+    gtsam::PriorFactor<gtsam::Pose3>(
+      key, pose, makeCovarianceNoiseModel(covariance, params_->unobservable_variance)));
   pending_values_.insert(key, pose);
   latest_key_ = key;
 }
@@ -97,9 +98,10 @@ uint64_t GraphOptimizer::addRelativeFactor(
     initialize(gtsam::Pose3(), 0);
   }
 
-  pending_factors_.add(gtsam::BetweenFactor<gtsam::Pose3>(
-    from_key, to_key, relative_pose,
-    makeCovarianceNoiseModel(covariance, params_->unobservable_variance)));
+  pending_factors_.add(
+    gtsam::BetweenFactor<gtsam::Pose3>(
+      from_key, to_key, relative_pose,
+      makeCovarianceNoiseModel(covariance, params_->unobservable_variance)));
 
   if (!pending_values_.exists(to_key) && !current_estimates_.exists(to_key)) {
     const gtsam::Pose3 from_pose = current_estimates_.exists(from_key)
@@ -121,9 +123,10 @@ void GraphOptimizer::addGroundPlaneFactor(
   const auto noise = gtsam::noiseModel::Diagonal::Sigmas(
     (gtsam::Vector(3) << normal_sigma, normal_sigma, distance_sigma).finished());
 
-  pending_factors_.add(std::make_shared<GroundPlaneFactor>(
-    key, observed_normal_in_base, observed_distance_to_base, reference_normal_in_map,
-    reference_plane_offset, noise));
+  pending_factors_.add(
+    std::make_shared<GroundPlaneFactor>(
+      key, observed_normal_in_base, observed_distance_to_base, reference_normal_in_map,
+      reference_plane_offset, noise));
 }
 
 gtsam::Values GraphOptimizer::optimize()

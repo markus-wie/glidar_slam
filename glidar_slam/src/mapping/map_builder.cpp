@@ -142,9 +142,10 @@ void MapBuilder::apply(const KeyFrame & keyframe)
     const double res = keyframe.local_occupancy->resolution;
 
     for (const auto & local_cell : keyframe.local_occupancy->cells) {
-      const gtsam::Point3 point = keyframe.pose.transformFrom(gtsam::Point3(
-        (static_cast<double>(local_cell.x) + 0.5) * res,
-        (static_cast<double>(local_cell.y) + 0.5) * res, 0.0));
+      const gtsam::Point3 point = keyframe.pose.transformFrom(
+        gtsam::Point3(
+          (static_cast<double>(local_cell.x) + 0.5) * res,
+          (static_cast<double>(local_cell.y) + 0.5) * res, 0.0));
       if (!std::isfinite(point.x()) || !std::isfinite(point.y())) {
         continue;
       }
@@ -164,9 +165,10 @@ void MapBuilder::apply(const KeyFrame & keyframe)
     const double res = keyframe.local_ground->resolution;
 
     for (const auto & local_cell : keyframe.local_ground->cells) {
-      const gtsam::Point3 point = keyframe.pose.transformFrom(gtsam::Point3(
-        (static_cast<double>(local_cell.x) + 0.5) * res,
-        (static_cast<double>(local_cell.y) + 0.5) * res, 0.0));
+      const gtsam::Point3 point = keyframe.pose.transformFrom(
+        gtsam::Point3(
+          (static_cast<double>(local_cell.x) + 0.5) * res,
+          (static_cast<double>(local_cell.y) + 0.5) * res, 0.0));
       if (!std::isfinite(point.x()) || !std::isfinite(point.y())) {
         continue;
       }

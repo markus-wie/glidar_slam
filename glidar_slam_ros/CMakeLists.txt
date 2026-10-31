@@ -44,9 +44,9 @@ target_link_libraries(${PROJECT_NAME}_scan_matcher_plugins
 
 target_precompile_headers(${PROJECT_NAME}_wrapper PUBLIC
   <rclcpp/rclcpp.hpp>
-  <tf2_ros/buffer.h>
-  <tf2_ros/transform_broadcaster.h>
-  <tf2_ros/transform_listener.h>
+  <tf2_ros/buffer.hpp>
+  <tf2_ros/transform_broadcaster.hpp>
+  <tf2_ros/transform_listener.hpp>
 )
 
 target_include_directories(${PROJECT_NAME}_wrapper

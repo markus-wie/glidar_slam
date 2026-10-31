@@ -13,11 +13,11 @@
 #include "message_filters/synchronizer.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
-#include "tf2/LinearMath/Transform.h"
-#include "tf2/exceptions.h"
+#include "tf2/LinearMath/Transform.hpp"
+#include "tf2/exceptions.hpp"
 #include "tf2/time.hpp"
-#include "tf2_ros/buffer.h"
-#include "tf2_ros/transform_listener.h"
+#include "tf2_ros/buffer.hpp"
+#include "tf2_ros/transform_listener.hpp"
 
 namespace glidar_slam_eval {
 
@@ -51,8 +51,9 @@ public:
 
     synchronizer_ = std::make_shared<message_filters::Synchronizer<ScanSyncPolicy>>(
       ScanSyncPolicy(sync_queue_size_), front_scan_subscriber_, rear_scan_subscriber_);
-    synchronizer_->registerCallback(std::bind(
-      &LidarFusionNode::scanCallback, this, std::placeholders::_1, std::placeholders::_2));
+    synchronizer_->registerCallback(
+      std::bind(
+        &LidarFusionNode::scanCallback, this, std::placeholders::_1, std::placeholders::_2));
     synchronizer_->setMaxIntervalDuration(
       rclcpp::Duration::from_seconds(sync_max_interval_seconds_));
 

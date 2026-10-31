@@ -20,8 +20,8 @@ A demo environment is available at [glidar_slam_demo](https://github.com/markus-
 
 ## Prerequisites
 
-- Ubuntu 24.04 LTS (the packages require CMake 3.27 or newer and a C++17 compiler)
-- ROS 2 Kilted (the only distribution the development container is built for; other distributions are untested)
+- Ubuntu 26.04 LTS (the packages require CMake 3.27 or newer and a C++17 compiler)
+- ROS 2 Lyrical (the only distribution the development container is built for; other distributions are untested)
 - Installed dependencies via rosdep (GTSAM, PCL, OpenCV, Eigen, nanoflann, and Intel TBB)
 
 ## Build
