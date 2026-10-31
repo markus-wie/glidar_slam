@@ -315,6 +315,7 @@ bool SlamSystem::process(
         submap_grid_->add(pts, kf->key);
       }
 
+      previous_odom_pose_ = latest_odom_pose;
       localization_submap_center_ = latest_pose_.pose;
       localization_initialized_ = true;
     }
