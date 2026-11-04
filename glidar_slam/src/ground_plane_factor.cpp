@@ -7,22 +7,21 @@
 namespace glidar_slam {
 
 GroundPlaneFactor::GroundPlaneFactor(
-  gtsam::Key key, const gtsam::Vector3 & observed_normal_in_base, double observed_distance_to_base,
-  const gtsam::Vector3 & reference_normal_in_map, double reference_plane_offset,
-  const gtsam::SharedNoiseModel & model)
+  gtsam::Key key, const gtsam::Vector3 & observed_normal_in_base,
+  const gtsam::Vector3 & observed_centroid_in_base, const gtsam::Vector3 & reference_normal_in_map,
+  double reference_plane_offset, const gtsam::SharedNoiseModel & model)
 : NoiseModelFactor1<gtsam::Pose3>(model, key),
   observed_normal_in_base_(observed_normal_in_base.normalized()),
-  observed_distance_to_base_(observed_distance_to_base),
+  observed_centroid_in_base_(observed_centroid_in_base),
   reference_normal_in_map_(reference_normal_in_map.normalized()),
   reference_plane_offset_(reference_plane_offset)
 {
-  const gtsam::Vector3 basis_axis =
-    std::abs(reference_normal_in_map_.dot(gtsam::Vector3::UnitZ())) < 0.9 ? gtsam::Vector3::UnitZ()
-                                                                          : gtsam::Vector3::UnitX();
-  tangent_x_ = reference_normal_in_map_.cross(basis_axis).normalized();
-  tangent_y_ = reference_normal_in_map_.cross(tangent_x_).normalized();
-
-  auto gaussian_model = std::dynamic_pointer_cast<gtsam::noiseModel::Gaussian>(model);
+  // The sigmas are kept for serialization, so look through a robust wrapper.
+  gtsam::SharedNoiseModel base_model = model;
+  if (const auto robust_model = std::dynamic_pointer_cast<gtsam::noiseModel::Robust>(model)) {
+    base_model = robust_model->noise();
+  }
+  auto gaussian_model = std::dynamic_pointer_cast<gtsam::noiseModel::Gaussian>(base_model);
   if (gaussian_model) {
     gtsam::Vector sigmas = gaussian_model->sigmas();
     normal_sigma_ = sigmas(0);
@@ -46,13 +45,19 @@ gtsam::Vector GroundPlaneFactor::evaluateError(
 gtsam::Vector GroundPlaneFactor::error(const gtsam::Pose3 & pose) const
 {
   const gtsam::Vector3 normal_in_map = pose.rotation().matrix() * observed_normal_in_base_;
-  const double plane_offset = observed_distance_to_base_ - normal_in_map.dot(pose.translation());
+  // The height is measured at the ground anchor point of base_link. A plane distance measured at
+  // the base origin would change with a camera tilt through the lever arm to the camera.
+  const gtsam::Point3 centroid_in_map = pose.transformFrom(observed_centroid_in_base_);
+  const double height_error =
+    reference_normal_in_map_.dot(centroid_in_map) + reference_plane_offset_;
 
-  gtsam::Vector2 normal_err_2d =
+  // The angle-based chart is monotonic up to 180 degrees. A sin(angle) projection onto the tangent
+  // plane would turn into a force towards an upside-down pose beyond 90 degrees.
+  const gtsam::Vector2 normal_error =
     gtsam::Unit3(reference_normal_in_map_).localCoordinates(gtsam::Unit3(normal_in_map));
 
   gtsam::Vector3 error;
-  error << normal_err_2d.x(), normal_err_2d.y(), plane_offset - reference_plane_offset_;
+  error << normal_error.x(), normal_error.y(), height_error;
 
   return error;
 }
@@ -62,14 +67,14 @@ gtsam::Vector3 GroundPlaneFactor::getObservedNormalInBase() const
   return observed_normal_in_base_;
 }
 
-double GroundPlaneFactor::getObservedDistanceToBase() const
-{
-  return observed_distance_to_base_;
-}
-
 gtsam::Vector3 GroundPlaneFactor::getReferenceNormalInMap() const
 {
   return reference_normal_in_map_;
+}
+
+gtsam::Vector3 GroundPlaneFactor::getObservedCentroidInBase() const
+{
+  return observed_centroid_in_base_;
 }
 
 double GroundPlaneFactor::getReferencePlaneOffset() const

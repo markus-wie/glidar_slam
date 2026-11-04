@@ -6,15 +6,30 @@
 #include <limits>
 #include <memory>
 #include <sstream>
+#include <vector>
 
 #include "glidar_slam/logger/logger.hpp"
 #include "glidar_slam/parameters.hpp"
 #include "glidar_slam/types.hpp"
 #include "opencv2/imgproc.hpp"
+#include "pcl/common/transforms.h"
 #include "pcl/filters/voxel_grid.h"
 #include "pcl/segmentation/sac_segmentation.h"
 
 namespace glidar_slam {
+
+namespace {
+
+// Valid depth range in meters. Written as a positive test so NaN depth is rejected as well.
+constexpr float MIN_VALID_DEPTH = 0.01F;
+constexpr float MAX_VALID_DEPTH = 20.0F;
+
+bool isValidDepth(float depth)
+{
+  return depth >= MIN_VALID_DEPTH && depth <= MAX_VALID_DEPTH;
+}
+
+}  // namespace
 
 GroundPlaneExtractor::Result GroundPlaneExtractor::extract(
   const cv::Mat & bgr_image, const cv::Mat & depth_image, const CameraIntrinsics & intrinsics,
@@ -53,8 +68,8 @@ GroundPlaneExtractor::Result GroundPlaneExtractor::extract(
     return reject("invalid ground ROI ratios");
   }
 
-  const int max_depth_sq =
-    parameters.ground_extraction_max_distance * parameters.ground_extraction_max_distance;
+  const float max_depth_sq = static_cast<float>(
+    parameters.ground_extraction_max_distance * parameters.ground_extraction_max_distance);
 
   const int first_col = static_cast<int>(std::floor(roi_ratios[0] * depth_image.cols));
   const int last_col = static_cast<int>(std::ceil((1.0F - roi_ratios[1]) * depth_image.cols));
@@ -106,8 +121,8 @@ GroundPlaneExtractor::Result GroundPlaneExtractor::extract(
       const float z =
         depth_is_u16 ? static_cast<float>(depth_row_u16[col]) * 0.001f : depth_row_f32[col];
 
-      // arbitrary setting to omit obvious outliers
-      if (z < 0.01f || z > 20.0f) {
+      // arbitrary setting to omit obvious outliers, also rejects NaN depth
+      if (!isValidDepth(z)) {
         continue;
       }
 
@@ -172,12 +187,13 @@ GroundPlaneExtractor::Result GroundPlaneExtractor::extract(
   }
 
   Eigen::Vector3f normal(coefficients.values[0], coefficients.values[1], coefficients.values[2]);
-  if (!normal.allFinite() || normal.norm() < 1e-6f) {
+  const float norm = normal.norm();
+  if (!normal.allFinite() || !std::isfinite(coefficients.values[3]) || norm < 1e-6f) {
     return reject("RANSAC produced an invalid ground-plane normal");
   }
 
-  normal.normalize();
-  float distance = coefficients.values[3];
+  normal /= norm;
+  float distance = coefficients.values[3] / norm;
   if (normal.z() < 0.0F) {
     normal = -normal;
     distance = -distance;
@@ -241,7 +257,7 @@ GroundPlaneExtractor::Result GroundPlaneExtractor::extract(
       const float z =
         depth_is_u16 ? static_cast<float>(depth_row_u16[col]) * 0.001f : depth_row_f32[col];
 
-      if (z < 0.01f || z > 20.0f) {
+      if (!isValidDepth(z)) {
         continue;
       }
 
@@ -278,6 +294,28 @@ GroundPlaneExtractor::Result GroundPlaneExtractor::extract(
 
   dense_extraction_timestamp = timestamp();
 
+  // A rotation of the camera about its own center keeps its distance to the ground, so the camera
+  // height above the plane minus its mounting height is the height of base_link above the ground.
+  // Measuring it at the base origin instead would add the lever arm to the camera.
+  const float base_height = d_cam - t_base_cam.z();
+  observation.centroid_in_base = -base_height * normal;
+
+  // base_link is parallel to the ground, so the tilt of the fitted plane stems from the camera
+  // extrinsics. Level the cloud by rotating the normal onto +Z about the camera position, which
+  // keeps the camera's (x, y) fixed so that a mispitched camera swings the ground rays back to
+  // their true horizontal distance. The z of the translation is then set so that the ground
+  // lies at z = 0, since (R * p).z() == normal.dot(p) == -distance for every point on the plane.
+  const Eigen::Matrix3f level_rotation =
+    Eigen::Quaternionf::FromTwoVectors(normal, Eigen::Vector3f::UnitZ()).toRotationMatrix();
+  Eigen::Vector3f level_translation = t_base_cam - level_rotation * t_base_cam;
+  level_translation.z() = distance;
+
+  Eigen::Affine3f level_from_base = Eigen::Affine3f::Identity();
+  level_from_base.linear() = level_rotation;
+  level_from_base.translation() = level_translation;
+  pcl::transformPointCloud(*dense_ground_cloud, *dense_ground_cloud, level_from_base);
+
+  observation.level_from_base = level_from_base;
   observation.point_count = valid_point_count;
   observation.inlier_count = dense_ground_cloud->size();
   observation.ground_cloud = dense_ground_cloud;

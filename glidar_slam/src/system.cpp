@@ -53,7 +53,7 @@ gtsam::Pose3 initialPoseFromGroundObservation(
   return gtsam::Pose3(
     gtsam::Rot3::Quaternion(
       map_from_base.w(), map_from_base.x(), map_from_base.y(), map_from_base.z()),
-    gtsam::Point3(0.0, 0.0, observation->distance_to_base));
+    gtsam::Point3(0.0, 0.0, -observation->centroid_in_base.cast<double>().dot(normal_in_base)));
 }
 
 gtsam::Matrix66 planarOdometryCovariance(
@@ -416,8 +416,16 @@ bool SlamSystem::process(
 
     if (is_initialization) {
       // Standard Initialization (Strong Prior)
-      root_pose = initialPoseFromGroundObservation(ground_observation);
-      graph_optimizer_->initialize(root_pose, static_cast<uint64_t>(timestamp * 1e6));
+      // The first keyframe is treated like every other one: x, y and yaw are anchored by the prior
+      // while roll, pitch and z are determined by its ground plane factor. Without a usable
+      // observation the pose is a level guess at z = 0 and has to be anchored completely.
+      const bool ground_usable = hasUsableGroundObservation(ground_observation);
+      root_pose =
+        ground_usable ? initialPoseFromGroundObservation(ground_observation) : gtsam::Pose3();
+      graph_optimizer_->initialize(
+        root_pose, static_cast<uint64_t>(timestamp * 1e6), !ground_usable);
+      handleGroundConstraint(ground_observation, next_key);
+      graph_optimizer_->optimize();
     } else {
       // Tracking Reset (Weak Prior)
       root_pose = tracking_reset_pose_;
@@ -1060,17 +1068,29 @@ gtsam::Matrix66 SlamSystem::unobservablePoseCovariance()
   return covariance;
 }
 
-void SlamSystem::handleGroundConstraint(
-  std::optional<GroundPlaneObservation> & ground_observation, uint64_t next_keyframe_key)
+namespace {
+
+// arbitrarily chosen threshold under which a realistic ground plane might not be observable
+constexpr std::size_t MINIMUM_GROUND_INLIER_COUNT = 50;
+
+}  // namespace
+
+bool SlamSystem::hasUsableGroundObservation(
+  const std::optional<GroundPlaneObservation> & ground_observation) const
 {
-  // arbitrarily chosen threshold under which a realistic ground plane might not be observable
-  constexpr std::size_t MINIMUM_INLIER_COUNT = 50;
+  return parameters_->ground_optimization_enable && ground_observation.has_value() &&
+         ground_observation->inlier_count >= MINIMUM_GROUND_INLIER_COUNT;
+}
 
-  const bool use_ground_constraint = ground_observation.has_value() &&
-                                     parameters_->ground_optimization_enable &&
-                                     ground_observation->inlier_count >= MINIMUM_INLIER_COUNT;
-
-  if (!use_ground_constraint) {
+void SlamSystem::handleGroundConstraint(
+  const std::optional<GroundPlaneObservation> & ground_observation, uint64_t next_keyframe_key)
+{
+  if (!hasUsableGroundObservation(ground_observation)) {
+    if (parameters_->ground_optimization_enable && ground_observation.has_value()) {
+      SAM_WARN(
+        "Keyframe {} has no ground plane factor: only {} ground inliers (minimum {})",
+        next_keyframe_key, ground_observation->inlier_count, MINIMUM_GROUND_INLIER_COUNT);
+    }
     return;
   }
 
@@ -1078,8 +1098,9 @@ void SlamSystem::handleGroundConstraint(
   double ground_distance_to_base = static_cast<double>(ground_observation->distance_to_base);
 
   graph_optimizer_->addGroundPlaneFactor(
-    next_keyframe_key, ground_normal_in_base, ground_distance_to_base, gtsam::Vector3::UnitZ(), 0.0,
-    parameters_->ground_normal_sigma, parameters_->ground_distance_sigma);
+    next_keyframe_key, ground_normal_in_base, ground_observation->centroid_in_base.cast<double>(),
+    gtsam::Vector3::UnitZ(), 0.0, parameters_->ground_normal_sigma,
+    parameters_->ground_distance_sigma);
 
   if (parameters_->ground_debug_enable) {
     SAM_INFO(

@@ -73,8 +73,11 @@ public:
 private:
   bool shouldCreateKeyFrame(const gtsam::Pose3 & current_odom_pose) const;
 
+  bool hasUsableGroundObservation(
+    const std::optional<GroundPlaneObservation> & ground_observation) const;
+
   void handleGroundConstraint(
-    std::optional<GroundPlaneObservation> & ground_observation, uint64_t next_keyframe_key);
+    const std::optional<GroundPlaneObservation> & ground_observation, uint64_t next_keyframe_key);
 
   void handleGroundMatchingConstraint(
     const std::shared_ptr<const KeyFrame> & reference_keyframe,

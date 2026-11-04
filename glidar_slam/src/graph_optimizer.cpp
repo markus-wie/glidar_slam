@@ -14,6 +14,9 @@ namespace glidar_slam {
 
 namespace {
 
+constexpr double GROUND_HUBER_THRESHOLD = 1.345;
+constexpr double RELATIVE_HUBER_THRESHOLD = 1.345;
+
 gtsam::noiseModel::Gaussian::shared_ptr makeCovarianceNoiseModel(
   const gtsam::Matrix66 & covariance, double unobservable_variance)
 {
@@ -52,7 +55,8 @@ GraphOptimizer::GraphOptimizer(const std::shared_ptr<Parameters> & params)
   isam_ = gtsam::ISAM2(isam_params_);
 }
 
-void GraphOptimizer::initialize(const gtsam::Pose3 & initial_pose, uint64_t timestamp)
+void GraphOptimizer::initialize(
+  const gtsam::Pose3 & initial_pose, uint64_t timestamp, bool constrain_vertical_dofs)
 {
   pending_factors_.resize(0);
   pending_values_.clear();
@@ -62,8 +66,15 @@ void GraphOptimizer::initialize(const gtsam::Pose3 & initial_pose, uint64_t time
   latest_timestamp_ = timestamp;
   initialized_ = true;
 
-  auto prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
-    (gtsam::Vector(6) << 1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 1e-4).finished());
+  // Pose3 tangent order is (roll, pitch, yaw, x, y, z). A single noisy ground observation must not
+  // be frozen into roll, pitch and z, so these stay loosely anchored if a ground factor follows.
+  constexpr double TIGHT_SIGMA = 1e-4;
+  constexpr double LOOSE_SIGMA = 1.0;
+  const double vertical_sigma = constrain_vertical_dofs ? TIGHT_SIGMA : LOOSE_SIGMA;
+
+  gtsam::Vector6 sigmas;
+  sigmas << vertical_sigma, vertical_sigma, TIGHT_SIGMA, TIGHT_SIGMA, TIGHT_SIGMA, vertical_sigma;
+  const auto prior_noise = gtsam::noiseModel::Diagonal::Sigmas(sigmas);
 
   pending_factors_.add(gtsam::PriorFactor<gtsam::Pose3>(0, initial_pose, prior_noise));
   pending_values_.insert(0, initial_pose);
@@ -116,16 +127,19 @@ uint64_t GraphOptimizer::addRelativeFactor(
 }
 
 void GraphOptimizer::addGroundPlaneFactor(
-  uint64_t key, const gtsam::Vector3 & observed_normal_in_base, double observed_distance_to_base,
-  const gtsam::Vector3 & reference_normal_in_map, double reference_plane_offset,
-  double normal_sigma, double distance_sigma)
+  uint64_t key, const gtsam::Vector3 & observed_normal_in_base,
+  const gtsam::Vector3 & observed_centroid_in_base, const gtsam::Vector3 & reference_normal_in_map,
+  double reference_plane_offset, double normal_sigma, double distance_sigma)
 {
-  const auto noise = gtsam::noiseModel::Diagonal::Sigmas(
+  const auto gaussian = gtsam::noiseModel::Diagonal::Sigmas(
     (gtsam::Vector(3) << normal_sigma, normal_sigma, distance_sigma).finished());
+  // Huber keeps a single bad ground observation from dominating the graph.
+  const auto noise = gtsam::noiseModel::Robust::Create(
+    gtsam::noiseModel::mEstimator::Huber::Create(GROUND_HUBER_THRESHOLD), gaussian);
 
   pending_factors_.add(
     std::make_shared<GroundPlaneFactor>(
-      key, observed_normal_in_base, observed_distance_to_base, reference_normal_in_map,
+      key, observed_normal_in_base, observed_centroid_in_base, reference_normal_in_map,
       reference_plane_offset, noise));
 }
 
@@ -217,7 +231,7 @@ std::vector<SerializedFactor> GraphOptimizer::getSerializedFactors() const
       sf.type = SerializedFactorType::GroundPlane;
       sf.to_key = ground_factor->key();
       sf.observed_normal_in_base = ground_factor->getObservedNormalInBase();
-      sf.observed_distance_to_base = ground_factor->getObservedDistanceToBase();
+      sf.observed_centroid_in_base = ground_factor->getObservedCentroidInBase();
       sf.reference_normal_in_map = ground_factor->getReferenceNormalInMap();
       sf.reference_plane_offset = ground_factor->getReferencePlaneOffset();
       sf.normal_sigma = ground_factor->getNormalSigma();
@@ -270,7 +284,7 @@ bool GraphOptimizer::restore(const SlamStateSnapshot & snapshot)
       addRelativeFactor(factor.from_key, factor.to_key, factor.relative_pose, factor.covariance);
     } else if (factor.type == SerializedFactorType::GroundPlane) {
       addGroundPlaneFactor(
-        factor.to_key, factor.observed_normal_in_base, factor.observed_distance_to_base,
+        factor.to_key, factor.observed_normal_in_base, factor.observed_centroid_in_base,
         factor.reference_normal_in_map, factor.reference_plane_offset, factor.normal_sigma,
         factor.distance_sigma);
     } else {

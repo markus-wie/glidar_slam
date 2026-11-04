@@ -21,7 +21,10 @@ class GraphOptimizer
 public:
   explicit GraphOptimizer(const std::shared_ptr<Parameters> & params);
 
-  void initialize(const gtsam::Pose3 & initial_pose, uint64_t timestamp);
+  // Anchors key 0 at `initial_pose`. With `constrain_vertical_dofs` set to false only x, y and yaw
+  // are pinned tightly and roll, pitch and z are left to the ground plane factor of the same key.
+  void initialize(
+    const gtsam::Pose3 & initial_pose, uint64_t timestamp, bool constrain_vertical_dofs = true);
   void addPriorFactor(uint64_t key, const gtsam::Pose3 & pose);
   void addPriorFactor(uint64_t key, const gtsam::Pose3 & pose, const gtsam::Matrix66 & covariance);
 
@@ -30,7 +33,8 @@ public:
     const gtsam::Matrix66 & covariance);
 
   void addGroundPlaneFactor(
-    uint64_t key, const gtsam::Vector3 & observed_normal_in_base, double observed_distance_to_base,
+    uint64_t key, const gtsam::Vector3 & observed_normal_in_base,
+    const gtsam::Vector3 & observed_centroid_in_base,
     const gtsam::Vector3 & reference_normal_in_map, double reference_plane_offset,
     double normal_sigma, double distance_sigma);
 

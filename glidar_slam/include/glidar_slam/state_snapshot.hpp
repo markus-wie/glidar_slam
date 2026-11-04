@@ -30,7 +30,7 @@ struct SerializedFactor
   gtsam::Matrix66 covariance{gtsam::Matrix66::Zero()};
 
   gtsam::Vector3 observed_normal_in_base{gtsam::Vector3::UnitZ()};
-  double observed_distance_to_base{0.0};
+  gtsam::Vector3 observed_centroid_in_base{gtsam::Vector3::Zero()};
   gtsam::Vector3 reference_normal_in_map{gtsam::Vector3::UnitZ()};
   double reference_plane_offset{0.0};
   double normal_sigma{0.0};
@@ -39,7 +39,7 @@ struct SerializedFactor
 
 struct SlamStateSnapshot
 {
-  static constexpr std::uint32_t kFormatVersion = 1;
+  static constexpr std::uint32_t kFormatVersion = 3;
 
   std::uint32_t format_version{kFormatVersion};
   std::string state_id;

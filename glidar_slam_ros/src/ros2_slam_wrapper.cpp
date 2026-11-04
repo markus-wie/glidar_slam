@@ -849,8 +849,13 @@ void Ros2SlamWrapper::odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr
 void Ros2SlamWrapper::publishGroundDebug(
   const glidar_slam::GroundPlaneObservation & observation, const rclcpp::Time & stamp) const
 {
+  // The ground cloud is expressed in the leveled base frame, but is published in the base frame.
+  glidar_slam::PointCloudXYZRGBA ground_cloud_in_base;
+  pcl::transformPointCloud(
+    *observation.ground_cloud, ground_cloud_in_base, observation.level_from_base.inverse());
+
   sensor_msgs::msg::PointCloud2 cloud_msg;
-  pcl::toROSMsg(*observation.ground_cloud, cloud_msg);
+  pcl::toROSMsg(ground_cloud_in_base, cloud_msg);
   cloud_msg.header.stamp = stamp;
   cloud_msg.header.frame_id = parameters_->base_frame;
   ground_debug_cloud_publisher_->publish(cloud_msg);
@@ -927,11 +932,14 @@ void Ros2SlamWrapper::publishGroundDebugImage(
       overlay, cv::Point(left, top), cv::Point(right - 1, bottom - 1), cv::Scalar(255, 0, 255), 2);
   }
 
-  const Eigen::Affine3f camera_from_base = base_from_camera.inverse();
+  // The ground cloud is expressed in the leveled base frame and has to be un-leveled before it is
+  // projected with the camera extrinsics.
+  const Eigen::Affine3f camera_from_leveled =
+    base_from_camera.inverse() * observation.level_from_base.inverse();
 
   for (const auto & point : *observation.ground_cloud) {
     const Eigen::Vector3f point_in_camera =
-      camera_from_base * Eigen::Vector3f(point.x, point.y, point.z);
+      camera_from_leveled * Eigen::Vector3f(point.x, point.y, point.z);
     if (!point_in_camera.allFinite() || point_in_camera.z() <= 0.0F) {
       continue;
     }

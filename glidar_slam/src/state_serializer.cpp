@@ -233,6 +233,9 @@ void writeGroundObservation(std::ostream & stream, const GroundPlaneObservation 
     write(stream, observation.normal_in_base(index));
   }
   write(stream, observation.distance_to_base);
+  for (int index = 0; index < 3; ++index) {
+    write(stream, observation.centroid_in_base(index));
+  }
   write(stream, static_cast<std::uint64_t>(observation.point_count));
   write(stream, static_cast<std::uint64_t>(observation.inlier_count));
   writePointCloudRGBA(stream, observation.ground_cloud);
@@ -246,6 +249,9 @@ GroundPlaneObservation readGroundObservation(std::istream & stream)
     read(stream, observation.normal_in_base(index));
   }
   read(stream, observation.distance_to_base);
+  for (int index = 0; index < 3; ++index) {
+    read(stream, observation.centroid_in_base(index));
+  }
   const auto point_count = readCount(stream, "ground point count");
   const auto inlier_count = readCount(stream, "ground inlier count");
   observation.point_count = static_cast<std::size_t>(point_count);
@@ -325,7 +331,9 @@ bool StateSerializer::save(
       for (int index = 0; index < 3; ++index) {
         write(stream, factor.observed_normal_in_base(index));
       }
-      write(stream, factor.observed_distance_to_base);
+      for (int index = 0; index < 3; ++index) {
+        write(stream, factor.observed_centroid_in_base(index));
+      }
       for (int index = 0; index < 3; ++index) {
         write(stream, factor.reference_normal_in_map(index));
       }
@@ -435,7 +443,9 @@ bool StateSerializer::load(
       for (int index = 0; index < 3; ++index) {
         read(stream, factor.observed_normal_in_base(index));
       }
-      read(stream, factor.observed_distance_to_base);
+      for (int index = 0; index < 3; ++index) {
+        read(stream, factor.observed_centroid_in_base(index));
+      }
       for (int index = 0; index < 3; ++index) {
         read(stream, factor.reference_normal_in_map(index));
       }
