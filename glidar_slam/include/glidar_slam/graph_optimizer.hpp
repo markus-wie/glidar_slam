@@ -30,7 +30,7 @@ public:
 
   uint64_t addRelativeFactor(
     uint64_t from_key, uint64_t to_key, const gtsam::Pose3 & relative_pose,
-    const gtsam::Matrix66 & covariance);
+    const gtsam::Matrix66 & covariance, bool robust = false);
 
   void addGroundPlaneFactor(
     uint64_t key, const gtsam::Vector3 & observed_normal_in_base,

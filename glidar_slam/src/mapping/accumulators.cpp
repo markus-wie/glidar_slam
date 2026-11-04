@@ -3,11 +3,15 @@
 #include <algorithm>
 #include <limits>
 
+#include "glidar_slam/logger/logger.hpp"
 #include "glidar_slam/utils.hpp"
 
 namespace glidar_slam::mapping {
 
 namespace {
+
+constexpr std::int64_t MAXIMUM_GRID_CELLS_PER_SIDE = 20000;
+
 template <typename MapType>
 bool getBounds(const MapType & values, int & min_x, int & min_y, int & max_x, int & max_y)
 {
@@ -35,7 +39,18 @@ bool getBounds(const MapType & values, int & min_x, int & min_y, int & max_x, in
     max_y = std::max(max_y, y);
     has_data = true;
   }
-  return has_data;
+
+  if (!has_data) {
+    return false;
+  }
+
+  const std::int64_t width = static_cast<std::int64_t>(max_x) - min_x + 1;
+  const std::int64_t height = static_cast<std::int64_t>(max_y) - min_y + 1;
+  if (width > MAXIMUM_GRID_CELLS_PER_SIDE || height > MAXIMUM_GRID_CELLS_PER_SIDE) {
+    SAM_WARN("Global map extent {}x{} cells exceeds the limit, not publishing it.", width, height);
+    return false;
+  }
+  return true;
 }
 }  // namespace
 

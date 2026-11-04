@@ -118,7 +118,6 @@ private:
   PointCloudXYZRGBAPtr latest_ground_matching_debug_;
   std::optional<cv::Mat> latest_ground_extraction_debug_;
 
-  bool loop_closure_optimization_pending_{false};
   bool tracking_reset_pending_{false};
   gtsam::Pose3 tracking_reset_pose_;
   bool localization_mode_{false};

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <execution>
 #include <limits>
 #include <numeric>
@@ -15,12 +16,28 @@ namespace glidar_slam {
 
 namespace {
 
+constexpr double MAXIMUM_POINT_COORDINATE = 2000.0;
+
+bool isUsablePoint(const Point2D & point)
+{
+  return std::isfinite(point.x) && std::isfinite(point.y) &&
+         std::abs(point.x) < MAXIMUM_POINT_COORDINATE &&
+         std::abs(point.y) < MAXIMUM_POINT_COORDINATE;
+}
+
 int cellCoordinate(double value, double resolution)
 {
   return static_cast<int>(std::floor(value / resolution));
 }
 
-void resizeGrid(
+constexpr std::int64_t MAXIMUM_GRID_CELLS = 25'000'000;
+
+bool fitsGridLimit(std::int64_t width, std::int64_t height)
+{
+  return width * height <= MAXIMUM_GRID_CELLS;
+}
+
+bool resizeGrid(
   SubmapGrid::HitCountGrid & grid, int required_min_x, int required_max_x, int required_min_y,
   int required_max_y)
 {
@@ -28,55 +45,79 @@ void resizeGrid(
   if (
     has_storage && required_min_x >= grid.origin_x && required_max_x < grid.origin_x + grid.width &&
     required_min_y >= grid.origin_y && required_max_y < grid.origin_y + grid.height) {
-    return;
+    return true;
   }
 
-  int new_min_x = required_min_x;
-  int new_max_x = required_max_x;
-  int new_min_y = required_min_y;
-  int new_max_y = required_max_y;
+  std::int64_t new_min_x = required_min_x;
+  std::int64_t new_max_x = required_max_x;
+  std::int64_t new_min_y = required_min_y;
+  std::int64_t new_max_y = required_max_y;
 
   if (has_storage) {
-    new_min_x = std::min(new_min_x, grid.origin_x);
-    new_max_x = std::max(new_max_x, grid.origin_x + grid.width - 1);
-    new_min_y = std::min(new_min_y, grid.origin_y);
-    new_max_y = std::max(new_max_y, grid.origin_y + grid.height - 1);
+    new_min_x = std::min<std::int64_t>(new_min_x, grid.origin_x);
+    new_max_x = std::max<std::int64_t>(new_max_x, grid.origin_x + grid.width - 1);
+    new_min_y = std::min<std::int64_t>(new_min_y, grid.origin_y);
+    new_max_y = std::max<std::int64_t>(new_max_y, grid.origin_y + grid.height - 1);
 
-    const int required_width = new_max_x - new_min_x + 1;
-    const int required_height = new_max_y - new_min_y + 1;
-    const int new_width = std::max(required_width, grid.width * 2);
-    const int new_height = std::max(required_height, grid.height * 2);
-
-    const int extra_width = new_width - required_width;
-    const int extra_height = new_height - required_height;
-
-    new_min_x -= extra_width / 2;
-    new_min_y -= extra_height / 2;
-    new_max_x = new_min_x + new_width - 1;
-    new_max_y = new_min_y + new_height - 1;
-  }
-
-  const int new_width = new_max_x - new_min_x + 1;
-  const int new_height = new_max_y - new_min_y + 1;
-  std::vector<int> new_counts(static_cast<std::size_t>(new_width) * new_height, 0);
-  std::vector<int> new_active_index(static_cast<std::size_t>(new_width) * new_height, 0);
-
-  if (has_storage) {
-    for (int y = grid.origin_y; y < grid.origin_y + grid.height; ++y) {
-      const int old_offset = grid.flatIdx(grid.origin_x, y);
-      const int new_offset = (y - new_min_y) * new_width + (grid.origin_x - new_min_x);
-      std::copy_n(grid.counts.begin() + old_offset, grid.width, new_counts.begin() + new_offset);
-      std::copy_n(
-        grid.active_index.begin() + old_offset, grid.width, new_active_index.begin() + new_offset);
+    if (!fitsGridLimit(new_max_x - new_min_x + 1, new_max_y - new_min_y + 1)) {
+      // The storage only ever grows and also covers the area the sliding window has left. Forget
+      // that area before giving up, only cells that still hold hits have to be kept.
+      new_min_x = required_min_x;
+      new_max_x = required_max_x;
+      new_min_y = required_min_y;
+      new_max_y = required_max_y;
+      for (const auto & cell : grid.active_cells) {
+        new_min_x = std::min<std::int64_t>(new_min_x, cell.x);
+        new_max_x = std::max<std::int64_t>(new_max_x, cell.x);
+        new_min_y = std::min<std::int64_t>(new_min_y, cell.y);
+        new_max_y = std::max<std::int64_t>(new_max_y, cell.y);
+      }
     }
   }
 
-  grid.origin_x = new_min_x;
-  grid.origin_y = new_min_y;
-  grid.width = new_width;
-  grid.height = new_height;
+  const std::int64_t required_width = new_max_x - new_min_x + 1;
+  const std::int64_t required_height = new_max_y - new_min_y + 1;
+  if (!fitsGridLimit(required_width, required_height)) {
+    return false;
+  }
+
+  // Leave room to grow, so that not every new keyframe causes a reallocation.
+  std::int64_t new_width = required_width;
+  std::int64_t new_height = required_height;
+  if (has_storage) {
+    new_width = std::max<std::int64_t>(required_width, grid.width * 2LL);
+    new_height = std::max<std::int64_t>(required_height, grid.height * 2LL);
+    if (!fitsGridLimit(new_width, new_height)) {
+      new_width = required_width * 5 / 4;
+      new_height = required_height * 5 / 4;
+    }
+    if (!fitsGridLimit(new_width, new_height)) {
+      new_width = required_width;
+      new_height = required_height;
+    }
+  }
+  new_min_x -= (new_width - required_width) / 2;
+  new_min_y -= (new_height - required_height) / 2;
+
+  std::vector<int> new_counts(static_cast<std::size_t>(new_width * new_height), 0);
+  std::vector<int> new_active_index(static_cast<std::size_t>(new_width * new_height), 0);
+
+  // Only active cells hold hits, all other cells are zero.
+  for (const auto & cell : grid.active_cells) {
+    const int old_index = grid.flatIdx(cell.x, cell.y);
+    const std::int64_t new_index = (cell.y - new_min_y) * new_width + (cell.x - new_min_x);
+    new_counts[static_cast<std::size_t>(new_index)] = grid.counts[old_index];
+    new_active_index[static_cast<std::size_t>(new_index)] = grid.active_index[old_index];
+  }
+
+  grid.origin_x = static_cast<int>(new_min_x);
+  grid.origin_y = static_cast<int>(new_min_y);
+  grid.width = static_cast<int>(new_width);
+  grid.height = static_cast<int>(new_height);
   grid.counts = std::move(new_counts);
   grid.active_index = std::move(new_active_index);
+
+  return true;
 }
 
 void buildDistanceTransformField(
@@ -144,6 +185,8 @@ SubmapGrid::SubmapGrid(const std::vector<double> & resolutions)
 
 void SubmapGrid::add(const std::vector<Point2D> & points, uint64_t keyframe_id)
 {
+  // Resize every resolution first so that a keyframe is either added to all grids or to none.
+  // remove() relies on this to undo exactly what add() did.
   for (auto & [resolution, grid] : grids_) {
     int min_x = 0;
     int max_x = 0;
@@ -152,7 +195,7 @@ void SubmapGrid::add(const std::vector<Point2D> & points, uint64_t keyframe_id)
     bool has_finite_point = false;
 
     for (const auto & point : points) {
-      if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+      if (!isUsablePoint(point)) {
         continue;
       }
 
@@ -173,10 +216,17 @@ void SubmapGrid::add(const std::vector<Point2D> & points, uint64_t keyframe_id)
     if (!has_finite_point) {
       continue;
     }
-    resizeGrid(grid, min_x, max_x, min_y, max_y);
+    if (!resizeGrid(grid, min_x, max_x, min_y, max_y)) {
+      SAM_WARN(
+        "Submap grid would exceed the size limit ({} to {}, {} to {} cells), skipping keyframe {}.",
+        min_x, max_x, min_y, max_y, keyframe_id);
+      return;
+    }
+  }
 
+  for (auto & [resolution, grid] : grids_) {
     for (const auto & point : points) {
-      if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+      if (!isUsablePoint(point)) {
         continue;
       }
 
@@ -213,7 +263,7 @@ void SubmapGrid::remove(uint64_t keyframe_id)
 
   for (auto & [resolution, grid] : grids_) {
     for (const auto & point : points) {
-      if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+      if (!isUsablePoint(point)) {
         continue;
       }
 

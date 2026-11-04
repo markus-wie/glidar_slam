@@ -284,9 +284,7 @@ bool SlamSystem::process(
   double keyframe_ms = 0;
   double map_ms = 0;
   double submap_ms = 0;
-  double update_covariance_ms = 0;
   double update_poses_ms = 0;
-  double rebuild_submap_ms = 0;
   double loop_dispatch_ms = 0;
 
   if (sensor_data.laserScan()->empty()) {
@@ -721,44 +719,14 @@ bool SlamSystem::process(
     submap_ms = elapsedMilliseconds(submap_start);
   }
 
-  const auto update_covariance_start = std::chrono::steady_clock::now();
-
-  std::unordered_map<uint64_t, gtsam::Matrix66> optimized_covariances;
-  // TODO: This can get really costly.. Should at least be in some background thread
-  // The reason we need is for the loop closure proximity checker to correctly calculate the
-  // Mahalanobis distance between two keyframes.
-  if (loop_closure_optimization_pending_) {
-    for (const auto & keyframe : map_database_->getAllKeyFrames()) {
-      if (const auto covariance = graph_optimizer_->getMarginalCovariance(keyframe->key)) {
-        optimized_covariances.emplace(keyframe->key, *covariance);
-      }
-    }
-  }
-
-  if (parameters_->debug_timings) {
-    update_covariance_ms = elapsedMilliseconds(update_covariance_start);
-  }
-
   const auto update_poses_start = std::chrono::steady_clock::now();
 
-  for (const auto & keyframe : map_database_->updatePoses(updated_states, optimized_covariances)) {
+  for (const auto & keyframe : map_database_->updatePoses(updated_states)) {
     map_builder_->submit(keyframe);
   }
 
   if (parameters_->debug_timings) {
     update_poses_ms = elapsedMilliseconds(update_poses_start);
-  }
-
-  const auto rebuild_submap_start = std::chrono::steady_clock::now();
-
-  if (loop_closure_optimization_pending_) {
-    map_builder_->rebuild(map_database_->getAllKeyFrames());
-    rebuildSubmap();
-  }
-  loop_closure_optimization_pending_ = false;
-
-  if (parameters_->debug_timings) {
-    rebuild_submap_ms = elapsedMilliseconds(rebuild_submap_start);
   }
 
   {
@@ -785,13 +753,11 @@ bool SlamSystem::process(
       "SLAM SYSTEM timings [ms]: lidar_voxelization={}, loop_proposals={}, initialization={}, "
       "ground_extraction={}, "
       "csm={}, factor_preparation={}, "
-      "optimization={}, keyframe={}, map={}, submap={}, update_covariance={}, update_poses={}, "
-      "rebuild_submap={}, "
-      "loop_dispatch={}, "
+      "optimization={}, keyframe={}, map={}, submap={}, update_poses={}, loop_dispatch={}, "
       "total={}",
       lidar_voxelization_ms, loop_proposals_ms, initialization_ms, ground_extraction_ms, csm_ms,
-      factor_preparation_ms, optimization_ms, keyframe_ms, map_ms, submap_ms, update_covariance_ms,
-      update_poses_ms, rebuild_submap_ms, loop_dispatch_ms, elapsedMilliseconds(process_start));
+      factor_preparation_ms, optimization_ms, keyframe_ms, map_ms, submap_ms, update_poses_ms,
+      loop_dispatch_ms, elapsedMilliseconds(process_start));
   }
 
   return true;
@@ -921,7 +887,6 @@ bool SlamSystem::loadState(
 
   submap_grid_ = std::make_unique<SubmapGrid>(scan_matcher_->fieldResolutions());
 
-  loop_closure_optimization_pending_ = false;
   localization_mode_ = localization_only;
   localization_initialized_ = false;
 
@@ -1058,10 +1023,21 @@ bool SlamSystem::processLoopClosureProposals()
     proposals.emplace_back(proposal.value());
   }
 
+  if (proposals.empty()) {
+    return false;
+  }
+
   for (const auto & proposal : proposals) {
     graph_optimizer_->addRelativeFactor(
-      proposal.from_key, proposal.to_key, proposal.relative_pose, proposal.covariance);
+      proposal.from_key, proposal.to_key, proposal.relative_pose, proposal.covariance,
+      /*robust=*/true);
+  }
 
+  // Loop closures get their own update, so the keyframe that follows is matched against the
+  // corrected poses and submap.
+  const gtsam::Values updated_states = graph_optimizer_->optimize();
+
+  for (const auto & proposal : proposals) {
     map_database_->addEdge(proposal.from_key, proposal.to_key, MapDatabase::EdgeType::LoopClosure);
 
     SAM_INFO(
@@ -1069,9 +1045,21 @@ bool SlamSystem::processLoopClosureProposals()
       proposal.score);
   }
 
-  loop_closure_optimization_pending_ = loop_closure_optimization_pending_ || !proposals.empty();
+  // TODO: This can get really costly.. Should at least be in some background thread
+  // The reason we need is for the loop closure proximity checker to correctly calculate the
+  // Mahalanobis distance between two keyframes.
+  std::unordered_map<uint64_t, gtsam::Matrix66> optimized_covariances;
+  for (const auto & keyframe : map_database_->getAllKeyFrames()) {
+    if (const auto covariance = graph_optimizer_->getMarginalCovariance(keyframe->key)) {
+      optimized_covariances.emplace(keyframe->key, *covariance);
+    }
+  }
 
-  return !proposals.empty();
+  map_database_->updatePoses(updated_states, optimized_covariances);
+  map_builder_->rebuild(map_database_->getAllKeyFrames());
+  rebuildSubmap();
+
+  return true;
 }
 
 void SlamSystem::rebuildSubmap()

@@ -122,17 +122,21 @@ void GraphOptimizer::setInitialValue(uint64_t key, const gtsam::Pose3 & pose)
 
 uint64_t GraphOptimizer::addRelativeFactor(
   uint64_t from_key, uint64_t to_key, const gtsam::Pose3 & relative_pose,
-  const gtsam::Matrix66 & covariance)
+  const gtsam::Matrix66 & covariance, bool robust)
 {
   if (!initialized_) {
     SAM_WARN("Optimizer not initialized. Discarding factor.");
     initialize(gtsam::Pose3(), 0);
   }
 
-  pending_factors_.add(
-    gtsam::BetweenFactor<gtsam::Pose3>(
-      from_key, to_key, relative_pose,
-      makeCovarianceNoiseModel(covariance, params_->unobservable_variance)));
+  gtsam::SharedNoiseModel noise =
+    makeCovarianceNoiseModel(covariance, params_->unobservable_variance);
+  if (robust) {
+    noise = gtsam::noiseModel::Robust::Create(
+      gtsam::noiseModel::mEstimator::Huber::Create(RELATIVE_HUBER_THRESHOLD), noise);
+  }
+
+  pending_factors_.add(gtsam::BetweenFactor<gtsam::Pose3>(from_key, to_key, relative_pose, noise));
 
   if (!pending_values_.exists(to_key) && !current_estimates_.exists(to_key)) {
     const gtsam::Pose3 from_pose = current_estimates_.exists(from_key)
@@ -142,7 +146,8 @@ uint64_t GraphOptimizer::addRelativeFactor(
     pending_values_.insert(to_key, to_pose);
   }
 
-  latest_key_ = to_key;
+  // The query keyframe of an asynchronous loop closure can be older than the latest keyframe.
+  latest_key_ = std::max(latest_key_, to_key);
   return to_key;
 }
 
@@ -244,8 +249,13 @@ std::vector<SerializedFactor> GraphOptimizer::getSerializedFactors() const
       sf.to_key = between_factor->back();
       sf.relative_pose = between_factor->measured();
 
-      auto gaussian =
-        std::dynamic_pointer_cast<gtsam::noiseModel::Gaussian>(between_factor->noiseModel());
+      // Look through a robust wrapper, a failed cast would save a zero covariance. Restoring that
+      // would pin all six dimensions of the factor, including the unobservable ones.
+      const auto robust_model =
+        std::dynamic_pointer_cast<gtsam::noiseModel::Robust>(between_factor->noiseModel());
+      sf.robust = robust_model != nullptr;
+      auto gaussian = std::dynamic_pointer_cast<gtsam::noiseModel::Gaussian>(
+        robust_model ? robust_model->noise() : between_factor->noiseModel());
       sf.covariance = gaussian ? gaussian->covariance() : gtsam::Matrix66::Zero();
 
     } else if (auto ground_factor = std::dynamic_pointer_cast<GroundPlaneFactor>(factor)) {
@@ -302,7 +312,8 @@ bool GraphOptimizer::restore(const SlamStateSnapshot & snapshot)
       continue;
     }
     if (factor.type == SerializedFactorType::RelativePose) {
-      addRelativeFactor(factor.from_key, factor.to_key, factor.relative_pose, factor.covariance);
+      addRelativeFactor(
+        factor.from_key, factor.to_key, factor.relative_pose, factor.covariance, factor.robust);
     } else if (factor.type == SerializedFactorType::GroundPlane) {
       addGroundPlaneFactor(
         factor.to_key, factor.observed_normal_in_base, factor.observed_centroid_in_base,

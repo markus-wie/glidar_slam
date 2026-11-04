@@ -328,6 +328,7 @@ bool StateSerializer::save(
       write(stream, factor.to_key);
       writePose(stream, factor.relative_pose);
       writeMatrix(stream, factor.covariance);
+      write(stream, factor.robust);
       for (int index = 0; index < 3; ++index) {
         write(stream, factor.observed_normal_in_base(index));
       }
@@ -440,6 +441,7 @@ bool StateSerializer::load(
       read(stream, factor.to_key);
       factor.relative_pose = readPose(stream);
       readMatrix(stream, factor.covariance);
+      read(stream, factor.robust);
       for (int index = 0; index < 3; ++index) {
         read(stream, factor.observed_normal_in_base(index));
       }

@@ -28,6 +28,8 @@ struct SerializedFactor
   std::uint64_t to_key{0};
   gtsam::Pose3 relative_pose;
   gtsam::Matrix66 covariance{gtsam::Matrix66::Zero()};
+  // Whether a relative factor uses a robust noise model (loop closures).
+  bool robust{false};
 
   gtsam::Vector3 observed_normal_in_base{gtsam::Vector3::UnitZ()};
   gtsam::Vector3 observed_centroid_in_base{gtsam::Vector3::Zero()};
@@ -39,7 +41,7 @@ struct SerializedFactor
 
 struct SlamStateSnapshot
 {
-  static constexpr std::uint32_t kFormatVersion = 3;
+  static constexpr std::uint32_t kFormatVersion = 4;
 
   std::uint32_t format_version{kFormatVersion};
   std::string state_id;
