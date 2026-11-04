@@ -68,7 +68,7 @@ The default topics configured are:
 
 > **Note on Odometry and TF:** The odometry **pose** is not read from `odom_topic`. It is looked up from TF (`odom_frame` to `base_frame` at the scan timestamp, waiting up to `tf_lookup_timeout` seconds). The scan frame (`scan_frame`, or the `frame_id` of the scan message) and, in RGB-D mode, the camera frame must also be available in TF relative to `base_frame`. The `odom_topic` subscription is only used to obtain the odometry covariance. A scan is skipped with a warning if a required transform is unavailable.
 
-> **Note on RGB-D Mode:** Ground plane extraction, ground marking matching, and ground texture mapping require enabling `use_rgbd: true` in the parameter file. When `use_rgbd` is `false` (default), the node runs in 2D LiDAR-only mode and subscribes directly to `scan_topic`. When `use_rgbd: true`, `message_filters::Synchronizer` synchronizes LiDAR scans with RGB-D camera frames based on `approx_sync_max_interval`.
+> **Note on RGB-D Mode:** Ground plane extraction, ground marking matching, and ground texture mapping require enabling `use_rgbd: true` in the parameter file. The shipped parameter file enables it. When `use_rgbd` is `false`, the node runs in 2D LiDAR-only mode and subscribes directly to `scan_topic`. When `use_rgbd: true`, `message_filters::Synchronizer` synchronizes LiDAR scans with RGB-D camera frames based on `approx_sync_max_interval`.
 
 ## Project Structure
 
@@ -161,6 +161,7 @@ The node exposes services under the `glidar_slam/` namespace:
 - `glidar_slam/save_state` (`glidar_slam_msgs/srv/SaveSlamState`): Serializes keyframes, factors, and graph structure to a binary file.
 - `glidar_slam/load_state` (`glidar_slam_msgs/srv/LoadSlamState`): Loads a saved state, rebuilds maps, and resumes in either mapping or localization mode.
 - `glidar_slam/save_maps` (`glidar_slam_msgs/srv/SaveMaps`): Exports the occupancy grid (`.pgm` + `.yaml`) and ground texture (`.png` + `.yaml`).
+- `glidar_slam/save_trajectory` (`glidar_slam_msgs/srv/SaveTrajectory`): Writes the globally optimized keyframe poses, including all loop closure corrections, to a TUM file.
 - `glidar_slam/set_localization_mode` (`glidar_slam_msgs/srv/SetLocalizationMode`): Dynamically switches between mapping and localization modes.
 
 ### Save SLAM State
@@ -265,6 +266,7 @@ All parameters are configured in `glidar_slam_ros/config/glidar_slam_params.yaml
 
 - `lidar_fusion` (C++ node): Approximate-time-synchronizes the front and rear `LaserScan` topics, transforms the rear scan into the front scan frame via TF, and merges both into a single `LaserScan`. Parameters: `front_scan_topic`, `rear_scan_topic`, `output_topic`, `sync_queue_size`, `sync_max_interval`, `tf_lookup_timeout`.
 - `scripts/rgbd_bridge_node.py` (`rgbd_bridge`): For every fused scan it publishes a synthetic RGB-D triple (constant ground-plane depth image, patterned color image, `CameraInfo`) in `camera_front_color_optical_frame` at the scan timestamp, and writes `glidar_slam/estimated_pose` to a TUM trajectory file.
+- `scripts/sim_pose_recorder.py` (`sim_pose_recorder`): Simulation evaluation. Records the Gazebo ground truth as a TUM file and exports the final SLAM trajectory and occupancy map through the `glidar_slam` services, see [Simulation Evaluation](#simulation-evaluation).
 - `scripts/evaluate_trajectory.py`: Computes the metrics and writes `metrics.json` and `summary.txt`.
 - `scripts/plot_trajectory.py`: Plots estimated versus ground-truth XY trajectory.
 - `launch/eval.launch.py`: Runs the complete pipeline. `launch/gdb_slam.launch.py` starts only the SLAM node inside `xterm -e gdb` for debugging; it expects the bag playback and `lidar_fusion` to run separately (defaults `/scan` and `/dingo_velocity_controller/odom`, same as `eval.launch.py`).
@@ -302,7 +304,7 @@ The launch file starts `lidar_fusion`, `glidar_slam` (parameters from `glidar_sl
 
 > **Note:** The default paths assume the development container mount `/workspaces/glidar_slam_demo` and the default run directory is created when the launch file is evaluated. When overriding `output_dir`, also pass `trajectory_path` and `map_base_path`, otherwise they still point to the default run directory.
 
-> **Note on RGB-D:** The synthetic RGB-D data is only consumed if `use_rgbd: true` is set in the parameter file. `eval.launch.py` does not override it, and the shipped default is `false`, i.e. the evaluation runs LiDAR plus odometry only unless you enable it.
+> **Note on RGB-D:** `eval.launch.py` sets `use_rgbd` to `false`, so the synthetic RGB-D data is not consumed and the evaluation runs LiDAR plus odometry only. Change that override to use it.
 
 > **Note on the trajectory:** The recorded trajectory is the online estimate at keyframe rate. It is not rewritten after loop closures, so it does not contain later graph-optimization corrections.
 
@@ -315,13 +317,34 @@ python3 glidar_slam_eval/scripts/evaluate_trajectory.py \
 python3 glidar_slam_eval/scripts/plot_trajectory.py estimated.tum gt_poses.txt --output out/trajectory_comparison.png
 ```
 
+### Simulation Evaluation
+
+`launch/sim_eval.launch.py` performs the same evaluation in Gazebo instead of on a benchmark bag. It includes a simulation launch file that starts Gazebo, the robot and `glidar_slam`, and records the ground truth from the transforms of the simulated robot. These are expected as `tf2_msgs/TFMessage` on `ground_truth_topic`, for example from the `gz::sim::systems::PosePublisher` plugin bridged to ROS. `ground_truth_static_topic` is only needed for a `ground_truth_frame` that is connected through static transforms.
+
+```bash
+ros2 launch glidar_slam_eval sim_eval.launch.py duration:=80
+```
+
+`sim_pose_recorder` chains the Gazebo transforms from the world down to `ground_truth_frame`, which has to coincide with the frame `glidar_slam` estimates (`base_frame`), and writes `ground_truth.tum` at the rate of the dynamic pose updates. It stops `duration` simulation seconds after the first pose on `/glidar_slam/estimated_pose` and then saves the occupancy map and the final optimized keyframe trajectory (`estimated.tum`) through the `glidar_slam/save_maps` and `glidar_slam/save_trajectory` services. The launch file then runs `evaluate_trajectory.py` and `plot_trajectory.py` with the same metrics as the benchmark evaluation, and shuts down. The SLAM map origin is the first keyframe, so `se2` alignment (default) is needed to compare it with the world-frame ground truth.
+
+| Argument | Default |
+|---|---|
+| `output_dir` | Timestamped `sim_*` run directory |
+| `duration` | `60.0` simulation seconds (`0` records until the launch is interrupted, then no metrics are computed) |
+| `ground_truth_topic` / `ground_truth_static_topic` | `/gz/tf` / `/gz/tf_static` |
+| `ground_truth_frame` | Model frame of the simulated robot |
+| `estimated_pose_topic` | `/glidar_slam/estimated_pose` |
+| `alignment_mode` | `se2` |
+
+A recorded run can be re-evaluated with the commands above using `ground_truth.tum` and `estimated.tum`.
+
 ### Metrics and Outputs
 
-Ground-truth poses within the time range of the estimate are compared against the (linearly/slerp interpolated) estimate at the ground-truth timestamps. With `se2` alignment a closed-form 2D rigid alignment is applied first. All metrics are planar (XY and yaw):
+Estimated poses within the time range of the ground truth are compared against the (linearly/slerp interpolated) ground truth at the estimated timestamps. With `se2` alignment a closed-form 2D rigid alignment is applied first, which keeps the roll and pitch of the estimate. The metrics are planar (XY and yaw), except for the 3D APE:
 
-- APE translation [cm] and rotation [deg] (RMSE and maximum).
-- Fraction of poses with translation error below 5 cm / 10 cm and rotation error below 1° / 2° / 4°.
-- RPE translation and rotation over a time step (default 1 s) and a distance step (default 1 m).
+- APE translation [cm] and rotation [deg], planar and in 3D (RMSE and maximum).
+- Fraction of poses with planar translation error below 5 cm / 10 cm and yaw error below 1° / 2° / 4°.
+- RPE translation and rotation in the local frame over a time step (default 1 s) and a distance step (default 1 m). Pairs that span a gap in the data are skipped.
 
 Results are written to `output_dir`: `estimated.tum`, `occupancy_map.pgm/.yaml`, `metrics.json`, `summary.txt` and the trajectory plot. If fewer than two estimated or overlapping ground-truth poses exist, `metrics.json` reports `status: insufficient_data`.
 

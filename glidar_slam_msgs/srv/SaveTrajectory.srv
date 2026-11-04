@@ -1,0 +1,5 @@
+string filepath
+---
+bool success
+string message
+uint32 pose_count

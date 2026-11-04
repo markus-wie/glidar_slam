@@ -32,6 +32,7 @@ install(PROGRAMS
   scripts/evaluate_trajectory.py
   scripts/plot_trajectory.py
   scripts/rgbd_bridge_node.py
+  scripts/sim_pose_recorder.py
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
@@ -39,6 +40,7 @@ install(PROGRAMS
   scripts/evaluate_trajectory.py
   scripts/plot_trajectory.py
   scripts/rgbd_bridge_node.py
+  scripts/sim_pose_recorder.py
   DESTINATION share/${PROJECT_NAME}/scripts
 )
 

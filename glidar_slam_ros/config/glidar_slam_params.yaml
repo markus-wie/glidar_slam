@@ -20,7 +20,7 @@ glidar_slam:
     color_camera_info_topic: /camera/color/camera_info
 
     # Synchronization Parameter
-    use_rgbd: false
+    use_rgbd: true
     approx_sync_max_interval: 0.1
 
     # Odometry Covariance Override
@@ -55,9 +55,9 @@ glidar_slam:
     # Timing diagnostics for the SLAM pipeline and loop-closure worker.
     debug_timings: false
     # Debugging for the ground plane extraction and factor
-    ground_debug_enable: false
+    ground_debug_enable: true
     # Debugging for the ground plane matching
-    ground_matching_debug_enable: false
+    ground_matching_debug_enable: true
     # Debugging for the loop closure detection
     loop_debug_enable: false
 

@@ -161,6 +161,7 @@ def generate_launch_description():
                 "use_sim_time": True,
                 "scan_topic": scan_topic,
                 "odom_topic": odom_topic,
+                "use_rgbd": False,
             },
         ],
     )

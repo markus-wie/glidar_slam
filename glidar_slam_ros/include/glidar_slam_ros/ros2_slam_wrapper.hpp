@@ -16,6 +16,7 @@
 #include "glidar_slam_msgs/srv/load_slam_state.hpp"
 #include "glidar_slam_msgs/srv/save_maps.hpp"
 #include "glidar_slam_msgs/srv/save_slam_state.hpp"
+#include "glidar_slam_msgs/srv/save_trajectory.hpp"
 #include "glidar_slam_msgs/srv/set_localization_mode.hpp"
 #include "glidar_slam_ros/scan_matcher_interface.hpp"
 #include "gtsam/geometry/Pose3.h"
@@ -66,6 +67,10 @@ private:
   void saveStateCallback(
     std::shared_ptr<glidar_slam_msgs::srv::SaveSlamState::Request> request,
     std::shared_ptr<glidar_slam_msgs::srv::SaveSlamState::Response> response);
+
+  void saveTrajectoryCallback(
+    std::shared_ptr<glidar_slam_msgs::srv::SaveTrajectory::Request> request,
+    std::shared_ptr<glidar_slam_msgs::srv::SaveTrajectory::Response> response);
 
   void saveMapsCallback(
     std::shared_ptr<glidar_slam_msgs::srv::SaveMaps::Request> request,
@@ -163,6 +168,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr direct_scan_subscriber_;
   rclcpp::Service<glidar_slam_msgs::srv::SaveSlamState>::SharedPtr save_state_service_;
   rclcpp::Service<glidar_slam_msgs::srv::SaveMaps>::SharedPtr save_maps_service_;
+  rclcpp::Service<glidar_slam_msgs::srv::SaveTrajectory>::SharedPtr save_trajectory_service_;
   rclcpp::Service<glidar_slam_msgs::srv::LoadSlamState>::SharedPtr load_state_service_;
   rclcpp::Service<glidar_slam_msgs::srv::SetLocalizationMode>::SharedPtr
     set_localization_mode_service_;

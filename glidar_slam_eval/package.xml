@@ -19,6 +19,8 @@
   <depend>geometry_msgs</depend>
 
   <exec_depend>glidar_slam_ros</exec_depend>
+  <exec_depend>demo_bringup</exec_depend>
+  <exec_depend>tf2_msgs</exec_depend>
   <exec_depend>glidar_slam_msgs</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>

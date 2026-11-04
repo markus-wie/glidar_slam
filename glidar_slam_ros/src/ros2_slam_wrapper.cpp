@@ -8,6 +8,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <memory>
 #include <sstream>
@@ -220,6 +221,11 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     std::bind(
       &Ros2SlamWrapper::saveMapsCallback, this, std::placeholders::_1, std::placeholders::_2),
     rclcpp::ServicesQoS(), state_callback_group_);
+  save_trajectory_service_ = this->create_service<glidar_slam_msgs::srv::SaveTrajectory>(
+    "glidar_slam/save_trajectory",
+    std::bind(
+      &Ros2SlamWrapper::saveTrajectoryCallback, this, std::placeholders::_1, std::placeholders::_2),
+    rclcpp::ServicesQoS(), state_callback_group_);
 
   load_state_service_ = this->create_service<glidar_slam_msgs::srv::LoadSlamState>(
     "glidar_slam/load_state",
@@ -321,6 +327,53 @@ void Ros2SlamWrapper::saveStateCallback(
   response->keyframe_count = slam_system_->getKeyFrames().size();
   response->factor_count = slam_system_->getFactorCount();
   response->localization_active = slam_system_->isLocalizationMode();
+}
+
+void Ros2SlamWrapper::saveTrajectoryCallback(
+  std::shared_ptr<glidar_slam_msgs::srv::SaveTrajectory::Request> request,
+  std::shared_ptr<glidar_slam_msgs::srv::SaveTrajectory::Response> response)
+{
+  if (request->filepath.empty()) {
+    response->success = false;
+    response->message = "filepath must be non-empty";
+    return;
+  }
+
+  // Keyframe poses are the globally optimized ones (including loop closure corrections), in
+  // contrast to the online poses published while the graph was still being built.
+  auto keyframes = slam_system_->getKeyFrames();
+  if (keyframes.empty()) {
+    response->success = false;
+    response->message = "No keyframes available";
+    return;
+  }
+  std::sort(keyframes.begin(), keyframes.end(), [](const auto & a, const auto & b) {
+    return a->timestamp < b->timestamp;
+  });
+
+  std::ofstream file(request->filepath);
+  if (!file) {
+    response->success = false;
+    response->message = "Cannot open " + request->filepath;
+    return;
+  }
+  file << std::fixed << std::setprecision(9);
+  for (const auto & keyframe : keyframes) {
+    const auto & translation = keyframe->pose.translation();
+    const Eigen::Quaterniond rotation(keyframe->pose.rotation().matrix());
+    file << keyframe->timestamp << " " << translation.x() << " " << translation.y() << " "
+         << translation.z() << " " << rotation.x() << " " << rotation.y() << " " << rotation.z()
+         << " " << rotation.w() << "\n";
+  }
+  file.flush();
+  if (!file) {
+    response->success = false;
+    response->message = "Cannot write " + request->filepath;
+    return;
+  }
+  response->success = true;
+  response->pose_count = static_cast<uint32_t>(keyframes.size());
+  response->message = "Trajectory saved";
 }
 
 void Ros2SlamWrapper::saveMapsCallback(
