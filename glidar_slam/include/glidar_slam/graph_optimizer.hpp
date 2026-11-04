@@ -40,6 +40,10 @@ public:
 
   gtsam::Values optimize();
 
+  // Sets the linearization point of a new variable. Without it, the first relative factor added for
+  // the variable determines it.
+  void setInitialValue(uint64_t key, const gtsam::Pose3 & pose);
+
   std::optional<gtsam::Matrix66> getMarginalCovariance(gtsam::Key key);
 
   gtsam::Pose3 getLatestPose() const;

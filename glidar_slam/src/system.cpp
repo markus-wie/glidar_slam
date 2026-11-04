@@ -60,11 +60,17 @@ gtsam::Matrix66 planarOdometryCovariance(
   const gtsam::Matrix66 & covariance, const Parameters & parameters)
 {
   gtsam::Matrix66 result = covariance;
+
+  // Roll, pitch and z of a relative factor are not measured by planar odometry or the scan matcher.
+  // They are tied to the reference keyframe with a modest variance instead of an almost flat one,
+  // so a keyframe that lacks a ground observation keeps the attitude and height of its neighbor.
   const std::array<int, 3> unobservable_dimensions{0, 1, 5};
   for (const int dimension : unobservable_dimensions) {
+    const double sigma =
+      dimension == 5 ? parameters.relative_height_sigma : parameters.relative_tilt_sigma;
     result.row(dimension).setZero();
     result.col(dimension).setZero();
-    result(dimension, dimension) = parameters.unobservable_variance;
+    result(dimension, dimension) = sigma * sigma;
   }
   return result;
 }
@@ -75,6 +81,43 @@ gtsam::Pose3 makePlanarPose(const gtsam::Pose3 & pose)
   const double yaw = rpy.z();
   const auto & translation = pose.translation();
   return utils::makePlanarPose(translation.x(), translation.y(), yaw);
+}
+
+// Applies a planar odometry delta (x, y, yaw in the reference base frame) to a reference pose that
+// may carry roll, pitch and height. The robot drives on the horizontal map plane, so the
+// translation is rotated by the reference yaw only. Composing it with the full rotation would make
+// the pose climb or dive by delta_x * sin(pitch). Roll, pitch and z of the reference are kept.
+gtsam::Pose3 propagateHorizontally(
+  const gtsam::Pose3 & reference, const gtsam::Pose3 & planar_delta)
+{
+  const gtsam::Vector3 rpy = reference.rotation().rpy();
+  const double reference_yaw = rpy.z();
+  const double delta_yaw = planar_delta.rotation().yaw();
+  const double cos_yaw = std::cos(reference_yaw);
+  const double sin_yaw = std::sin(reference_yaw);
+  const double dx = planar_delta.x();
+  const double dy = planar_delta.y();
+
+  return gtsam::Pose3(
+    gtsam::Rot3::Ypr(reference_yaw + delta_yaw, rpy.y(), rpy.x()),
+    gtsam::Point3(
+      reference.x() + cos_yaw * dx - sin_yaw * dy, reference.y() + sin_yaw * dx + cos_yaw * dy,
+      reference.z()));
+}
+
+// Builds map -> odom from the optimized base pose and the planar odometry pose. Composing the full
+// 6-DoF pose with odom_pose.inverse() would let the roll and pitch of the base act on the lever arm
+// of the odometry translation and tilt the odom frame by distance * sin(pitch). The odom frame
+// therefore stays level (yaw only) and only inherits the optimized height, so base_link keeps
+// its z while the odom grid does not pitch into the floor.
+gtsam::Pose3 computeMapToOdom(
+  const gtsam::Pose3 & map_from_base, const gtsam::Pose3 & odom_from_base)
+{
+  const gtsam::Pose3 planar_map_from_odom =
+    makePlanarPose(map_from_base).compose(odom_from_base.inverse());
+  return gtsam::Pose3(
+    planar_map_from_odom.rotation(),
+    gtsam::Point3(planar_map_from_odom.x(), planar_map_from_odom.y(), map_from_base.z()));
 }
 
 gtsam::Matrix66 gtsamToEigenCovariance(
@@ -291,7 +334,7 @@ bool SlamSystem::process(
     if (!localization_initialized_) {
       {
         std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
-        latest_map_to_odom_ = latest_pose_.pose.compose(latest_odom_pose.inverse());
+        latest_map_to_odom_ = computeMapToOdom(latest_pose_.pose, latest_odom_pose);
 
         Pose2D initial_pose2d = utils::toPose2D(latest_pose_.pose);
         Eigen::Matrix3d initial_cov = Eigen::Matrix3d::Identity() * 1e-6;
@@ -358,7 +401,7 @@ bool SlamSystem::process(
     }
     {
       std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
-      latest_map_to_odom_ = optimized_pose.compose(latest_odom_pose.inverse());
+      latest_map_to_odom_ = computeMapToOdom(optimized_pose, latest_odom_pose);
     }
 
     const double distance_moved =
@@ -474,7 +517,7 @@ bool SlamSystem::process(
     }
     {
       std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
-      latest_map_to_odom_ = root_pose.compose(latest_odom_pose.inverse());
+      latest_map_to_odom_ = computeMapToOdom(root_pose, latest_odom_pose);
     }
 
     if (is_initialization) {
@@ -503,7 +546,7 @@ bool SlamSystem::process(
 
   // Get delta from the last keyframes odometry pose
   const gtsam::Pose3 odom_delta = reference_keyframe->odom_pose.inverse().compose(latest_odom_pose);
-  const gtsam::Pose3 current_guess = reference_keyframe->pose.compose(odom_delta);
+  const gtsam::Pose3 current_guess = propagateHorizontally(reference_keyframe->pose, odom_delta);
 
   // Check if we should spawn a new keyframe based on motion thresholds
   if (!shouldCreateKeyFrame(latest_odom_pose)) {
@@ -513,7 +556,7 @@ bool SlamSystem::process(
     }
     {
       std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
-      latest_map_to_odom_ = current_guess.compose(latest_odom_pose.inverse());
+      latest_map_to_odom_ = computeMapToOdom(current_guess, latest_odom_pose);
     }
     return false;
   }
@@ -577,21 +620,41 @@ bool SlamSystem::process(
       csm_result.covariance(1, 1), csm_result.covariance(2, 2));
   }
 
-  // Convert optimized absolute Pose2D back to gtsam::Pose3
-  gtsam::Pose3 optimized_world_pose = utils::toPose3(csm_result.optimized_pose);
+  // The scan matcher only observes x, y and yaw. Roll, pitch and z are taken from the prediction
+  // (i.e. the reference keyframe), otherwise a level pose at z = 0 would be compared with a tilted,
+  // elevated reference keyframe and the relative measurement would be wrong in x and y as well.
+  const gtsam::Vector3 guess_rpy = current_guess.rotation().rpy();
+  const gtsam::Pose3 optimized_world_pose(
+    gtsam::Rot3::Ypr(csm_result.optimized_pose.yaw, guess_rpy.y(), guess_rpy.x()),
+    gtsam::Point3(csm_result.optimized_pose.x, csm_result.optimized_pose.y, current_guess.z()));
 
   // Calculate the relative transform factor for the graph
   const gtsam::Pose3 csm_pose_delta =
     reference_keyframe->pose.inverse().compose(optimized_world_pose);
 
-  // Add Odometry Factor
+  const bool csm_usable = csm_result.score >= parameters_->tracking_minimum_score;
+  if (!csm_usable) {
+    SAM_WARN(
+      "Scan match score {} is below the tracking threshold {}, using odometry only.",
+      csm_result.score, parameters_->tracking_minimum_score);
+  }
+
+  // Start the optimization of the new keyframe from the scan match pose if that is used. This only
+  // sets the starting point, the pose of the keyframe is the result of the optimization.
+  graph_optimizer_->setInitialValue(
+    next_keyframe_key, csm_usable ? optimized_world_pose : current_guess);
+
+  // The odometry factor is expressed through the horizontally propagated guess so that it agrees
+  // with the CSM factor and does not make a pitched reference keyframe drive up a ramp.
   graph_optimizer_->addRelativeFactor(
-    reference_keyframe->key, next_keyframe_key, odom_delta,
+    reference_keyframe->key, next_keyframe_key, reference_keyframe->pose.between(current_guess),
     planarOdometryCovariance(odom_covariance, *parameters_));
 
   // Add LiDAR Scan Matching Factor
-  graph_optimizer_->addRelativeFactor(
-    reference_keyframe->key, next_keyframe_key, csm_pose_delta, csm_covariance);
+  if (csm_usable) {
+    graph_optimizer_->addRelativeFactor(
+      reference_keyframe->key, next_keyframe_key, csm_pose_delta, csm_covariance);
+  }
 
   handleGroundMatchingConstraint(
     reference_keyframe, ground_observation, current_guess, next_keyframe_key);
@@ -700,8 +763,7 @@ bool SlamSystem::process(
 
   {
     std::lock_guard<std::mutex> lock(latest_map_to_odom_mutex_);
-    gtsam::Pose3 odom_to_base = latest_odom_pose.inverse();
-    latest_map_to_odom_ = optimized_pose.compose(odom_to_base);
+    latest_map_to_odom_ = computeMapToOdom(optimized_pose, latest_odom_pose);
   }
 
   const auto loop_dispatch_start = std::chrono::steady_clock::now();

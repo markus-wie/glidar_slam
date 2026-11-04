@@ -17,12 +17,21 @@ namespace {
 constexpr double GROUND_HUBER_THRESHOLD = 1.345;
 constexpr double RELATIVE_HUBER_THRESHOLD = 1.345;
 
-gtsam::noiseModel::Gaussian::shared_ptr makeCovarianceNoiseModel(
-  const gtsam::Matrix66 & covariance, double unobservable_variance)
-{
-  constexpr double minimum_variance = 1e-8;
+// Sigma of the tightly anchored dimensions of the first keyframe.
+constexpr double PRIOR_TIGHT_SIGMA = 1e-4;
 
+// Clamping to a tiny variance would turn a degenerate direction into a near-infinite certainty.
+constexpr double MINIMUM_FACTOR_VARIANCE = 1e-6;
+
+// A restored prior has to keep the certainty it was created with.
+constexpr double MINIMUM_PRIOR_VARIANCE = PRIOR_TIGHT_SIGMA * PRIOR_TIGHT_SIGMA;
+
+gtsam::noiseModel::Gaussian::shared_ptr makeCovarianceNoiseModel(
+  const gtsam::Matrix66 & covariance, double unobservable_variance,
+  double minimum_variance = MINIMUM_FACTOR_VARIANCE)
+{
   if (!covariance.allFinite()) {
+    SAM_WARN("Relative factor covariance is not finite, the factor carries no information.");
     return gtsam::noiseModel::Gaussian::Covariance(
       gtsam::Matrix66::Identity() * unobservable_variance);
   }
@@ -34,6 +43,10 @@ gtsam::noiseModel::Gaussian::shared_ptr makeCovarianceNoiseModel(
       gtsam::Matrix66::Identity() * unobservable_variance);
   }
   if (solver.eigenvalues().minCoeff() < -minimum_variance) {
+    SAM_WARN(
+      "Relative factor covariance is indefinite (min eigenvalue {}), the factor carries no "
+      "information.",
+      solver.eigenvalues().minCoeff());
     return gtsam::noiseModel::Gaussian::Covariance(
       gtsam::Matrix66::Identity() * unobservable_variance);
   }
@@ -68,12 +81,12 @@ void GraphOptimizer::initialize(
 
   // Pose3 tangent order is (roll, pitch, yaw, x, y, z). A single noisy ground observation must not
   // be frozen into roll, pitch and z, so these stay loosely anchored if a ground factor follows.
-  constexpr double TIGHT_SIGMA = 1e-4;
   constexpr double LOOSE_SIGMA = 1.0;
-  const double vertical_sigma = constrain_vertical_dofs ? TIGHT_SIGMA : LOOSE_SIGMA;
+  const double vertical_sigma = constrain_vertical_dofs ? PRIOR_TIGHT_SIGMA : LOOSE_SIGMA;
 
   gtsam::Vector6 sigmas;
-  sigmas << vertical_sigma, vertical_sigma, TIGHT_SIGMA, TIGHT_SIGMA, TIGHT_SIGMA, vertical_sigma;
+  sigmas << vertical_sigma, vertical_sigma, PRIOR_TIGHT_SIGMA, PRIOR_TIGHT_SIGMA, PRIOR_TIGHT_SIGMA,
+    vertical_sigma;
   const auto prior_noise = gtsam::noiseModel::Diagonal::Sigmas(sigmas);
 
   pending_factors_.add(gtsam::PriorFactor<gtsam::Pose3>(0, initial_pose, prior_noise));
@@ -98,6 +111,13 @@ void GraphOptimizer::addPriorFactor(
       key, pose, makeCovarianceNoiseModel(covariance, params_->unobservable_variance)));
   pending_values_.insert(key, pose);
   latest_key_ = key;
+}
+
+void GraphOptimizer::setInitialValue(uint64_t key, const gtsam::Pose3 & pose)
+{
+  if (!pending_values_.exists(key) && !current_estimates_.exists(key)) {
+    pending_values_.insert(key, pose);
+  }
 }
 
 uint64_t GraphOptimizer::addRelativeFactor(
@@ -168,7 +188,8 @@ std::optional<gtsam::Matrix66> GraphOptimizer::getMarginalCovariance(gtsam::Key 
 
   try {
     return isam_.marginalCovariance(key);
-  } catch (const gtsam::ValuesKeyDoesNotExist & e) {
+  } catch (const std::exception & e) {
+    SAM_WARN("Marginal covariance of key {} unavailable: {}", key, e.what());
     return std::nullopt;
   }
 }
@@ -272,8 +293,8 @@ bool GraphOptimizer::restore(const SlamStateSnapshot & snapshot)
 
   for (const auto & factor : snapshot.factors) {
     if (factor.type == SerializedFactorType::PriorPose) {
-      const auto prior_noise =
-        makeCovarianceNoiseModel(factor.covariance, params_->unobservable_variance);
+      const auto prior_noise = makeCovarianceNoiseModel(
+        factor.covariance, params_->unobservable_variance, MINIMUM_PRIOR_VARIANCE);
       pending_factors_.add(
         gtsam::PriorFactor<gtsam::Pose3>(factor.to_key, factor.relative_pose, prior_noise));
       pending_values_.insert(factor.to_key, factor.relative_pose);

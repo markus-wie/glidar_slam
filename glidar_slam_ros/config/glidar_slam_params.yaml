@@ -31,6 +31,9 @@ glidar_slam:
     minimum_travel_distance: 0.4
     minimum_travel_heading: 0.4
     unobservable_variance: 10000.0
+    # Sigma of roll/pitch [rad] and z [m] between consecutive keyframes (odometry factor)
+    relative_tilt_sigma: 0.03
+    relative_height_sigma: 0.03
     submap_window_size: 12
 
     # Startup Parameters
@@ -43,6 +46,8 @@ glidar_slam:
 
     # Localization Parameters
     localization_minimum_score: 0.5
+    # Scan matches below this score are ignored while tracking (odometry only)
+    tracking_minimum_score: 0.7
 
     ##### DEBUGGING #####
     # Visualize covariance ellipses for all keyframes instead of only the newest keyframe.

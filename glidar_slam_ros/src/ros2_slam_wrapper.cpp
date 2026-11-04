@@ -85,6 +85,9 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
     this->declare_parameter<double>("minimum_travel_heading", 0.5);
   parameters_->unobservable_variance =
     this->declare_parameter<double>("unobservable_variance", 1e6);
+  parameters_->relative_tilt_sigma = this->declare_parameter<double>("relative_tilt_sigma", 0.03);
+  parameters_->relative_height_sigma =
+    this->declare_parameter<double>("relative_height_sigma", 0.03);
   parameters_->submap_window_size = this->declare_parameter<int>("submap_window_size", 5);
 
   parameters_->mode =
@@ -99,6 +102,8 @@ Ros2SlamWrapper::Ros2SlamWrapper(const rclcpp::NodeOptions & options) : Node("gl
   }
   parameters_->localization_minimum_score =
     this->declare_parameter<double>("localization_minimum_score", 0.5);
+  parameters_->tracking_minimum_score =
+    this->declare_parameter<double>("tracking_minimum_score", parameters_->tracking_minimum_score);
 
   parameters_->debug_visualize_covariances =
     this->declare_parameter<bool>("debug_visualize_covariances", false);
@@ -518,6 +523,10 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.minimum_travel_heading = parameter.as_double();
     } else if (name == "unobservable_variance") {
       updated.unobservable_variance = parameter.as_double();
+    } else if (name == "relative_tilt_sigma") {
+      updated.relative_tilt_sigma = parameter.as_double();
+    } else if (name == "relative_height_sigma") {
+      updated.relative_height_sigma = parameter.as_double();
     } else if (name == "debug_visualize_covariances") {
       updated.debug_visualize_covariances = parameter.as_bool();
     } else if (name == "scan.voxelization_enable") {
@@ -602,6 +611,8 @@ rcl_interfaces::msg::SetParametersResult Ros2SlamWrapper::onParametersChanged(
       updated.loop_minimum_score = parameter.as_double();
     } else if (name == "localization_minimum_score") {
       updated.localization_minimum_score = parameter.as_double();
+    } else if (name == "tracking_minimum_score") {
+      updated.tracking_minimum_score = parameter.as_double();
     } else if (name == "debug_timings") {
       updated.debug_timings = parameter.as_bool();
     }

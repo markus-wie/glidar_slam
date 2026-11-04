@@ -104,8 +104,8 @@ The repository contains the following ROS 2 packages:
 7. **Factor Graph Optimization**:
    - GTSAM `iSAM2` incrementally optimizes a 6-DoF pose trajectory combining:
      - Prior factor on the initial keyframe (tight in $x$, $y$ and yaw; $z$/roll/pitch are left to the ground plane factor if one is available) or weak prior during tracking reset, see [Services](#services).
-     - Consecutive relative scan-matching factors (SE(2) pose with inflated unobservable $z$/roll/pitch covariance).
-     - Between-factors from odometry.
+     - Consecutive relative scan-matching factors (SE(2) pose with inflated unobservable $z$/roll/pitch covariance), unless the match score is below `tracking_minimum_score`.
+     - Between-factors from odometry, which also tie $z$/roll/pitch to the previous keyframe (`relative_height_sigma`, `relative_tilt_sigma`).
      - 3-DoF `GroundPlaneFactor` unary constraints.
      - Optional relative ground-marking factors.
      - Relative loop closure factors.
@@ -244,8 +244,9 @@ All parameters are configured in `glidar_slam_ros/config/glidar_slam_params.yaml
 
 - **Coordinate Frames**: `odom_frame`, `map_frame`, `scan_frame`, `camera_frame`, `base_frame`.
 - **Topics & Sync**: `scan_topic`, `odom_topic`, camera topics, `use_rgbd`, `approx_sync_max_interval`, `tf_lookup_timeout` (seconds to wait for TF lookups, default 0.1).
-- **Motion & Keyframes**: `minimum_travel_distance`, `minimum_travel_heading`, `submap_window_size`, `unobservable_variance`, `odom_covariance_diagonal` (`[x, y, z, roll, pitch, yaw]`, use `-1.0` for an entry to take the covariance from the odometry message instead).
+- **Motion & Keyframes**: `minimum_travel_distance`, `minimum_travel_heading`, `submap_window_size`, `unobservable_variance`, `relative_tilt_sigma` and `relative_height_sigma` (sigmas of roll/pitch and z between consecutive keyframes), `odom_covariance_diagonal` (`[x, y, z, roll, pitch, yaw]`, use `-1.0` for an entry to take the covariance from the odometry message instead).
 - **Startup**: `startup.mode` (`"mapping"` or `"localization"`), `startup.map_load_path`, `startup.initial_pose`.
+- **Tracking**: `tracking_minimum_score` (scan matches below this score add no scan-matching factor, the keyframe is then constrained by odometry, the ground plane and, if enabled, ground marking matching).
 - **Localization**: `localization_minimum_score` (minimum CSM score for accepting a pose).
 - **LiDAR Preprocessing**: `scan.voxelization_enable`, `scan.voxelization_size`, `scan.densification_enable`.
 - **Mapping**: `mapping.occupancy.resolution`, `mapping.occupancy.threshold` (occupancy probability above which a cell is treated as occupied, default 0.5), `mapping.ground.resolution`, `mapping.ground.enable_texture_mapping`, `mapping.ground.enable_ground_marking_mapping`, update probabilities (`prob_hit`, `prob_miss`, `prob_cap_min`, `prob_cap_max`).

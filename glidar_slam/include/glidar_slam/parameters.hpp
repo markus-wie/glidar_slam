@@ -50,6 +50,11 @@ struct Parameters
   double minimum_travel_distance{0.5};
   double minimum_travel_heading{0.5};
   double unobservable_variance{1e6};
+  // Sigmas of roll, pitch (rad) and z (m) of the relative odometry factor. The robot drives on a
+  // plane, so consecutive keyframes share their attitude and height. This keeps keyframes without a
+  // ground observation from drifting in these dimensions.
+  double relative_tilt_sigma{0.03};
+  double relative_height_sigma{0.03};
   int submap_window_size{5};
 
   // Startup Parameters
@@ -60,6 +65,7 @@ struct Parameters
 
   // Localization Parameters
   double localization_minimum_score{0.5};
+  double tracking_minimum_score{0.7};
 
   // Debugging Parameters
   bool debug_visualize_covariances{false};
@@ -147,6 +153,8 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
      << "  minimum_travel_distance: " << p.minimum_travel_distance << ",\n"
      << "  minimum_travel_heading: " << p.minimum_travel_heading << ",\n"
      << "  unobservable_variance: " << p.unobservable_variance << ",\n"
+     << "  relative_tilt_sigma: " << p.relative_tilt_sigma << ",\n"
+     << "  relative_height_sigma: " << p.relative_height_sigma << ",\n"
      << "  submap_window_size: " << p.submap_window_size << ",\n"
      << "  mode: " << (p.mode == Parameters::Mode::Mapping ? "mapping" : "localization") << ",\n"
      << "  map_load_path: " << p.map_load_path << ",\n"
@@ -159,6 +167,7 @@ inline std::ostream & operator<<(std::ostream & os, const Parameters & p)
 
   os << "],\n"
      << "  localization_minimum_score: " << p.localization_minimum_score << ",\n"
+     << "  tracking_minimum_score: " << p.tracking_minimum_score << ",\n"
      << "  debug_visualize_covariances: " << (p.debug_visualize_covariances ? "true" : "false")
      << ",\n"
      << "  debug_timings: " << (p.debug_timings ? "true" : "false") << ",\n"
