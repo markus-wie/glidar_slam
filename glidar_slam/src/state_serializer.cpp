@@ -347,6 +347,12 @@ bool StateSerializer::save(
       write(stream, closure.first);
       write(stream, closure.second);
     }
+
+    // The last block is still buffered, a failure to write it would go unnoticed otherwise.
+    stream.flush();
+    if (!stream) {
+      throw std::runtime_error("failed to write state file");
+    }
     return true;
   } catch (const std::exception & exception) {
     setError(error, exception.what());

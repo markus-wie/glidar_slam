@@ -195,7 +195,7 @@ To load directly into localization mode, set `mode: 'localization'`. If `use_sav
 
 ### Save Maps
 
-Exports `<base_filepath>.pgm` / `<base_filepath>.yaml` (standard map_server format; unknown cells are written as 205) and/or `<base_filepath>_texture.png` / `<base_filepath>_texture.yaml`:
+Exports `<base_filepath>.pgm` / `<base_filepath>.yaml` (standard map_server format; unknown cells are written as 205) and/or `<base_filepath>_texture.png` / `<base_filepath>_texture.yaml`. The request fails without writing anything if a requested map is not available, i.e. it is still empty, disabled or larger than 20000 cells per side:
 
 ```bash
 ros2 service call /glidar_slam/save_maps \

@@ -896,6 +896,10 @@ bool SlamSystem::loadState(
   } else if (use_saved_pose) {
     // 1. Clean continuous resume: Link directly to the last keyframe
     tracking_reset_pending_ = false;
+    // The next keyframe is matched against the submap, which has to hold the restored keyframes.
+    if (map_database_->size() > 0) {
+      rebuildSubmap();
+    }
     loop_closure_detector_->start();
     SAM_INFO("Map loaded successfully. Resuming continuous SLAM session.");
   } else {

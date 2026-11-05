@@ -21,9 +21,9 @@
 #include "cv_bridge/cv_bridge.hpp"
 #include "geometry_msgs/msg/quaternion.hpp"
 #include "glidar_slam/camera_model.hpp"
+#include "glidar_slam/mapping/map_exporter.hpp"
 #include "glidar_slam/sensor_data.hpp"
 #include "glidar_slam_ros/utils.hpp"
-#include "opencv2/imgcodecs.hpp"
 #include "opencv2/imgproc.hpp"
 #include "pcl/common/transforms.h"
 #include "pcl/point_types.h"
@@ -380,9 +380,6 @@ void Ros2SlamWrapper::saveMapsCallback(
   std::shared_ptr<glidar_slam_msgs::srv::SaveMaps::Request> request,
   std::shared_ptr<glidar_slam_msgs::srv::SaveMaps::Response> response)
 {
-  // agreed upon value for unknown occupancy for better visual differentiation
-  constexpr int UNKNOWN_OCCUPANCY = 205;
-
   if (request->base_filepath.empty() || (!request->save_occupancy && !request->save_texture)) {
     response->success = false;
     response->message = "base_filepath must be non-empty and at least one map must be selected";
@@ -396,75 +393,12 @@ void Ros2SlamWrapper::saveMapsCallback(
     return;
   }
 
-  try {
-    const auto & occupancy_info = snapshot->occupancy->getInfo();
-    if (request->save_occupancy) {
-      const std::string pgm_path = request->base_filepath + ".pgm";
-      const std::string yaml_path = request->base_filepath + ".yaml";
-      std::ofstream pgm(pgm_path, std::ios::binary);
-      if (!pgm) {
-        throw std::runtime_error("Cannot open " + pgm_path);
-      }
-      pgm << "P5\n" << occupancy_info.width << " " << occupancy_info.height << "\n255\n";
-      const auto & data = snapshot->occupancy->getData();
-      for (std::size_t y = 0; y < occupancy_info.height; ++y) {
-        for (std::size_t x = 0; x < occupancy_info.width; ++x) {
-          const std::size_t map_y = occupancy_info.height - 1 - y;
-          const std::size_t index = map_y * occupancy_info.width + x;
-
-          const auto value = data[index];
-          const std::uint8_t pixel =
-            value < 0
-              ? UNKNOWN_OCCUPANCY
-              : static_cast<std::uint8_t>(255U - (static_cast<unsigned int>(value) * 255U / 100U));
-          pgm.put(static_cast<char>(pixel));
-        }
-      }
-
-      std::ofstream yaml(yaml_path);
-      if (!yaml) {
-        throw std::runtime_error("Cannot open " + yaml_path);
-      }
-      yaml << "image: " << pgm_path.substr(pgm_path.find_last_of('/') + 1) << "\n"
-           << "mode: trinary\nresolution: " << occupancy_info.resolution << "\norigin: ["
-           << occupancy_info.origin_x << ", " << occupancy_info.origin_y
-           << ", 0.0]\nnegate: 0\noccupied_thresh: 0.6\nfree_thresh: 0.6\nthreshold: 128\n";
-    }
-
-    if (request->save_texture) {
-      const auto & info = snapshot->texture->getInfo();
-      const auto & rgb = snapshot->texture->getRgbData();
-      if (rgb.size() != static_cast<std::size_t>(info.width) * info.height * 3U) {
-        throw std::runtime_error("Texture map data size does not match its metadata");
-      }
-      cv::Mat image(info.height, info.width, CV_8UC4);
-      for (uint32_t r = 0; r < info.height; ++r) {
-        for (uint32_t c = 0; c < info.width; ++c) {
-          const std::size_t map_y = info.height - 1 - r;
-          const std::size_t index = map_y * info.width + c;
-
-          auto & pixel = image.at<cv::Vec4b>(r, c);
-          pixel[0] = rgb[index * 3U + 2U];
-          pixel[1] = rgb[index * 3U + 1U];
-          pixel[2] = rgb[index * 3U];
-          pixel[3] = (pixel[0] || pixel[1] || pixel[2]) ? 255U : 0U;
-        }
-      }
-      const std::string png_path = request->base_filepath + "_texture.png";
-      if (!cv::imwrite(png_path, image)) {
-        throw std::runtime_error("Cannot write " + png_path);
-      }
-      std::ofstream yaml(request->base_filepath + "_texture.yaml");
-      if (!yaml) {
-        throw std::runtime_error("Cannot open texture YAML");
-      }
-      yaml << "image: " << png_path.substr(png_path.find_last_of('/') + 1)
-           << "\nmode: trinary\nresolution: " << info.resolution << "\norigin: [" << info.origin_x
-           << ", " << info.origin_y << ", 0.0]\nnegate: 0\n";
-    }
-  } catch (const std::exception & exception) {
+  std::string error;
+  if (!glidar_slam::mapping::saveGlobalMaps(
+        *snapshot, request->base_filepath, request->save_occupancy, request->save_texture,
+        &error)) {
     response->success = false;
-    response->message = exception.what();
+    response->message = error;
     return;
   }
   response->success = true;

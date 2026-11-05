@@ -23,6 +23,7 @@ add_library(${PROJECT_NAME} SHARED
   src/mapping/global_map.cpp
   src/mapping/local_map.cpp
   src/mapping/map_builder.cpp
+  src/mapping/map_exporter.cpp
   src/utils.cpp
   src/submap_grid.cpp
   src/graph_optimizer.cpp
