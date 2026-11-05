@@ -21,7 +21,7 @@ A demo environment is available at [glidar_slam_demo](https://github.com/markus-
 ## Prerequisites
 
 - Ubuntu 26.04 LTS (the packages require CMake 3.27 or newer and a C++17 compiler)
-- ROS 2 Lyrical (the only distribution the development container is built for; other distributions are untested)
+- ROS 2 Lyrical (other distributions are untested)
 - Installed dependencies via rosdep (GTSAM, PCL, OpenCV, Eigen, nanoflann, and Intel TBB)
 
 ## Build
@@ -34,6 +34,12 @@ rosdep update
 rosdep install --from-paths src/glidar_slam --ignore-src -r -y
 # Build
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+```
+
+The unit tests of the core library need no ROS, sensors or recorded data:
+
+```bash
+colcon test --packages-select glidar_slam --event-handlers console_direct+
 ```
 
 ## Run
@@ -291,9 +297,9 @@ The launch file starts `lidar_fusion`, `glidar_slam` (parameters from `glidar_sl
 
 | Argument | Default |
 |---|---|
-| `bag_path` | `/workspaces/glidar_slam_demo/bagfiles/rosbag2_2026_10_01-16_25_46` |
-| `ground_truth_path` | `/workspaces/glidar_slam_demo/bagfiles/gt_poses.txt` (TUM format) |
-| `output_dir` | Timestamped run directory below `/workspaces/glidar_slam_demo/eval/` |
+| `bag_path` | Set this to the benchmark rosbag |
+| `ground_truth_path` | Set this to the ground truth (TUM format) |
+| `output_dir` | Timestamped run directory |
 | `trajectory_path` | `<run dir>/estimated.tum` |
 | `map_base_path` | `<run dir>/occupancy_map` |
 | `scan_topic` | `/scan` (fused scan) |
@@ -302,7 +308,7 @@ The launch file starts `lidar_fusion`, `glidar_slam` (parameters from `glidar_sl
 | `playback_rate` | `1.0` |
 | `alignment_mode` | `se2` (`none` or `se2`) |
 
-> **Note:** The default paths assume the development container mount `/workspaces/glidar_slam_demo` and the default run directory is created when the launch file is evaluated. When overriding `output_dir`, also pass `trajectory_path` and `map_base_path`, otherwise they still point to the default run directory.
+> **Note:** The default run directory is created when the launch file is evaluated. When overriding `output_dir`, also pass `trajectory_path` and `map_base_path`, otherwise they still point to the default run directory.
 
 > **Note on RGB-D:** `eval.launch.py` sets `use_rgbd` to `false`, so the synthetic RGB-D data is not consumed and the evaluation runs LiDAR plus odometry only. Change that override to use it.
 

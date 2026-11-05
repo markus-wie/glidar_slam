@@ -94,4 +94,17 @@ install(TARGETS
   DESTINATION include
 )
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(${PROJECT_NAME}_test
+    test/test_global_maps.cpp
+    test/test_graph_optimizer.cpp
+    test/test_slam_system_state.cpp
+    test/test_state_serializer.cpp
+    test/test_submap_grid.cpp
+  )
+  target_link_libraries(${PROJECT_NAME}_test ${PROJECT_NAME})
+endif()
+
 ament_package()
